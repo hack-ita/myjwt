@@ -82,7 +82,7 @@ See `--help` and the header of `myjwt.py` for the full list.
 
 ## Guide
 
-The full methodology for testing JWTs (signature, keys, headers, claims, sessions) is in the HackIta guide: [hackita.it/articoli/jwt-attacks](https://hackita.it/articoli/jwt-attacks/).
+The full methodology for testing JWTs (signature, keys, headers, claims, sessions) is in the HackIta guide: [hackita.it/articoli/jwt-attacks](https://en.hackita.it/articoli/jwt-attacks/).
 
 ## Legal
 
