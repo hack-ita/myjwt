@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 myjwt - minimal JWT decoder and auditor for the terminal.
-A HackIta tool - https://hackita.it - https://github.com/hackita/myjwt
+A HackIta tool - https://hackita.it - https://github.com/hack-ita/myjwt
 Author: Canio Campaniello (HackIta). License: MIT.
 
 Decodes header and payload, converts time claims, lists potential issues to
