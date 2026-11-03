@@ -1043,8 +1043,8 @@ def analyze_jwks(url, insecure=False):
 
 # --------------------------------------------------------- MAIN & CLI --
 def main():
-    global CURRENT_LANG
-    
+    global CURRENT_LANG, RED, DRED, WHITE, BLACK, GREEN, YELLOW, DIM, RESET, BOLD
+
     logo = f"""
 {WHITE}{BOLD}██╗  ██╗ █████╗  ██████╗██╗  ██╗{RED}██╗████████╗ █████╗ {RESET}
 {WHITE}{BOLD}██║  ██║██╔══██╗██╔════╝██║ ██╔╝{RED}██║╚══██╔══╝██╔══██╗{RESET}
@@ -1095,7 +1095,6 @@ def main():
     CURRENT_LANG = args.lang
     
     if args.no_color or not sys.stdout.isatty():
-        global RED, DRED, WHITE, BLACK, GREEN, YELLOW, DIM, RESET, BOLD
         RED = DRED = WHITE = BLACK = GREEN = YELLOW = DIM = RESET = BOLD = ""
     
     if not args.token and not args.file and not args.jwks:
