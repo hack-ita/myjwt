@@ -1,17 +1,37 @@
 # myjwt
 
-**A HackIta tool** · [hackita.it](https://hackita.it)
+**JWT Security Testing Framework** · a [HackIta](https://hackita.it) tool
 
-`myjwt` decodes and audits a JSON Web Token from the terminal. It is a single Python file with no dependencies, and it never sends anything over the network.
+`myjwt` is a single-file Python command-line tool to decode, inspect and audit JSON Web Tokens (JWT). It is built for authorized security assessments, CTFs and lab work, and for developers who want to check how their own tokens are configured.
 
-* Decodes header and payload (JWS), and recognizes encrypted JWE tokens
-* Converts `exp`, `nbf` and `iat` to readable UTC dates with relative time, including millisecond timestamps
-* Lists potential issues to verify: `alg: none`, empty signatures, `kid`, `jku`, `x5u`, `jwk`, `x5c`, missing or inconsistent time claims, missing `iss`/`aud`, authorization-relevant claims
-* Verifies an HMAC signature (HS256/384/512) with a secret or the exact bytes of a key file you provide (it does not search for secrets)
-* Accepts the token raw, from stdin, from a file, or pasted with `Authorization: Bearer`, cookie syntax or quotes
-* Optional JSON output for scripts
+* Decodes the header and payload of JWS tokens and recognizes encrypted JWE tokens
+* Audits a token and ranks the findings by severity, with an overall risk score
+* Verifies HMAC (HS256/384/512), RSA (RS/PS), ECDSA (ES) and EdDSA signatures
+* Inspects a JWKS endpoint and warns when private key material is exposed
+* Detects serialized or compressed data hidden inside payload claims
+* Output in six languages: English, Italian, Spanish, Portuguese, German and French
+* Works offline for decoding, auditing and verification. Network access only happens when you explicitly pass a URL option.
 
-Decoding a token confirms nothing by itself: the labels tell you **what to test**, the target's behaviour tells you whether it is vulnerable.
+> Decoding a token proves nothing by itself. A finding tells you **what to test**; only the behaviour of the target tells you whether it is really vulnerable.
+
+## Table of contents
+
+* [Install](#install)
+* [Requirements](#requirements)
+* [Quick start](#quick-start)
+* [Input methods](#input-methods)
+* [Options](#options)
+* [What the audit checks](#what-the-audit-checks)
+* [Risk score](#risk-score)
+* [Nested payload analyzer](#nested-payload-analyzer)
+* [JWKS analysis](#jwks-analysis)
+* [Languages](#languages)
+* [Exit codes](#exit-codes)
+* [Known limitations](#known-limitations)
+* [Defensive checklist](#defensive-checklist)
+* [Guides](#guides)
+* [Legal](#legal)
+* [License](#license)
 
 ## Install
 
@@ -19,74 +39,246 @@ Decoding a token confirms nothing by itself: the labels tell you **what to test*
 git clone https://github.com/hack-ita/myjwt
 cd myjwt
 chmod +x myjwt.py
+./myjwt.py --help
 ```
 
-Requires Python 3.8 or newer.
+## Requirements
 
-## Usage
+| Feature | Needs |
+| --- | --- |
+| Decode, audit, HMAC verification, wordlist check | Python 3.8 or newer, standard library only |
+| Asymmetric verification (`-K`: RSA, ECDSA, EdDSA) | `pip install cryptography` |
+| HTTP testing (`--url`, `--verify-endpoint`) | `pip install requests` |
+| JWKS analysis (`--jwks`) | standard library only |
+
+## Quick start
+
+All examples use a sample token signed with the secret `secret`:
 
 ```bash
-./myjwt.py "$JWT"                                  # decode and list potential issues
-echo "Authorization: Bearer $JWT" | ./myjwt.py     # header, cookie and quotes are stripped
-./myjwt.py -f token.txt                            # read the token from a file
-./myjwt.py "$JWT" -k mysecret                      # verify an HMAC signature
-./myjwt.py "$JWT" -K key.pem                       # use the exact bytes of a file as the key
-./myjwt.py "$JWT" --json                           # machine-readable output
-./myjwt.py --help                                  # all options
+TOKEN='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMDQyIiwibmFtZSI6ImFsaWNlIiwicm9sZSI6InVzZXIiLCJpYXQiOjE3NjcyMjU2MDAsImV4cCI6MTc2NzIyOTIwMCwiaXNzIjoiaHR0cHM6Ly9hdXRoLmV4YW1wbGUudGVzdCIsImF1ZCI6ImFwaSJ9.CGYSmszPlxLVdNdVPCSNz5u1tafyl4ILLix4JXqZRjs'
 ```
 
-## Example
+Decode a token:
+
+```bash
+./myjwt.py "$TOKEN"
+```
 
 ```text
-JWT decoded - JWS (3 parts)
-
-== Header ==
+[*] TOKEN TYPE: JWS
+[*] HEADER
 {
-  "alg": "none",
+  "alg": "HS256",
   "typ": "JWT"
 }
-
-== Payload ==
+[*] PAYLOAD
 {
-  "sub": "admin"
+  "sub": "1042",
+  "name": "alice",
+  "role": "user",
+  "iat": 1767225600,
+  "exp": 1767229200,
+  "iss": "https://auth.example.test",
+  "aud": "api"
 }
-
-== Signature ==
-  (empty)
-
-== Potential issues (decoding confirms nothing: verify against the target) ==
-  [CANDIDATE] alg is 'none': unsecured token. An issue only if the server accepts it.
-  [REVIEW   ] no 'exp': the token may never expire (depends on the token profile).
-  [INFO     ] no 'iss': check whether the server enforces an issuer.
-  [INFO     ] no 'aud': check whether the server enforces an audience (token substitution).
-  [INFO     ] authorization-relevant claims: sub. Relevant only if signature checking can be bypassed.
 ```
 
-| Label | Meaning |
+Audit it:
+
+```bash
+./myjwt.py --analyze "$TOKEN"
+```
+
+Verify an HMAC signature with a known secret:
+
+```bash
+./myjwt.py -k secret "$TOKEN"
+```
+
+```text
+[*] VERIFICATION
+[+] Signature VALID
+```
+
+Verify a signature with a public key (PEM):
+
+```bash
+./myjwt.py -K public.pem "$TOKEN"
+```
+
+Read the token from a file and print machine-readable findings:
+
+```bash
+./myjwt.py -f token.txt --analyze --json
+```
+
+## Input methods
+
+| Method | Example |
 | --- | --- |
-| `CONFIRMED` | Proven by the tool itself |
-| `CANDIDATE` | Worth testing first; only the target can confirm it |
-| `REVIEW` | Depends on the application's rules |
-| `INFO` | Context |
+| Argument | `./myjwt.py "$TOKEN"` |
+| File | `./myjwt.py -f token.txt` |
+| Standard input | `echo "$TOKEN" \| ./myjwt.py -f /dev/stdin` |
+
+The tool extracts the token from surrounding text, so you can paste a full `Authorization: Bearer ...` header, a `Cookie:` line or a quoted value. If several candidates are present, the longest one is used.
+
+Standard input is read through `-f /dev/stdin`. Piping into the command without `-f` prints the help and exits with code `2`.
+
+## Options
+
+| Option | Description |
+| --- | --- |
+| `token` | JWT to analyze (positional argument) |
+| `-f`, `--file FILE` | Read the token from a file |
+| `--analyze` | Run the vulnerability scanner and print the risk score |
+| `-k`, `--secret SECRET` | HMAC secret, used to verify the signature |
+| `-K`, `--pubkey FILE` | Public key file (PEM) for asymmetric verification |
+| `--json` | Print the findings as JSON (works together with `--analyze`) |
+| `--jwks URL` | Fetch and analyze a JWKS endpoint |
+| `--insecure` | Disable TLS certificate verification for `--jwks` and HTTP testing |
+| `--crack WORDLIST` | Check an HMAC token against a wordlist, to test secret strength |
+| `--max-lines N` | Limit the number of wordlist lines read |
+| `--attack {none,confusion,kid,forge}` | Generate a modified test token to try against a system you are authorized to test |
+| `--set CLAIM=VALUE` | Claim to set in the modified token (repeatable, the value can be JSON) |
+| `--jku URL`, `--x5u URL` | Header URL to set in the modified token |
+| `--url URL` | Target URL for HTTP testing |
+| `--verify-endpoint URL` | Endpoint to send the modified token to (takes priority over `--url`) |
+| `--method METHOD` | HTTP method, default `GET` |
+| `--headers HEADERS` | Extra request headers, comma-separated (`Name: value,Name: value`) |
+| `--success-strings LIST`, `--failure-strings LIST` | Comma-separated strings that mark success or failure in the response |
+| `--poc` | Print a ready-to-run `curl` command (needs `--url`) |
+| `--no-color` | Disable ANSI colors (colors are also disabled when output is not a terminal) |
+| `-en` `-it` `-es` `-pt` `-de` `-fr` | Output language |
+
+Run `./myjwt.py --help` for the authoritative list.
+
+## What the audit checks
+
+`--analyze` classifies each finding as `CRITICAL`, `HIGH`, `MEDIUM`, `LOW` or `INFO`.
+
+| Severity | Findings |
+| --- | --- |
+| `CRITICAL` | `alg` is `none` (unsecured token). ECDSA signature with a zeroed `r` or `s` value (CVE-2022-21449 pattern) |
+| `HIGH` | Missing `alg`. Non-numeric `exp`. `kid` containing path traversal or SQL-like content. `jku` or `x5u` that is not HTTPS. Embedded `jwk` or `x5c` in the header |
+| `MEDIUM` | Missing `typ`. `crit` header present. `b64` set to `false` (RFC 7797). Missing `exp`. `iat` in the future. `jku` or `x5u` present. `kid` with shell-like characters |
+| `LOW` | Unexpected `typ`. Lifetime longer than 24 hours. Missing `iss`. Missing `aud` |
+| `INFO` | Symmetric or asymmetric algorithm in use. Expired token. Claim names that look sensitive (`password`, `secret`, `token`, `api_key`, `email`) |
+
+Each finding is a lead to verify against the target, not a confirmed vulnerability.
+
+## Risk score
+
+Each finding adds points, and the total sets the overall level.
+
+| Severity | Points |
+| --- | --- |
+| `CRITICAL` | 10 |
+| `HIGH` | 5 |
+| `MEDIUM` | 2 |
+| `LOW` | 1 |
+| `INFO` | 0 |
+
+| Total | Level |
+| --- | --- |
+| 15 or more | `CRITICAL` |
+| 8 to 14 | `HIGH` |
+| 3 to 7 | `MEDIUM` |
+| 0 to 2 | `LOW` |
+
+Example on a token whose `kid` points outside the key directory and which has no `exp`, `iss` or `aud`:
+
+```text
+[*] VULNERABILITY ANALYSIS
+  [HIGH] Potential 'kid' path traversal
+  [MEDIUM] Missing 'exp' (expiration) claim
+  [LOW] Missing 'iss' (issuer) claim
+  [LOW] Missing 'aud' (audience) claim
+  [INFO] Symmetric HMAC (HS256) - secret strength is crucial
+
+[*] Overall Risk Score: 9 (HIGH)
+```
+
+## Nested payload analyzer
+
+Some applications store encoded objects inside a claim. For every string claim of 20 characters or more that decodes as Base64, `myjwt` tries to identify the content:
+
+* GZIP and ZLIB compressed data (it decompresses and keeps analyzing)
+* Java serialization
+* PHP serialization
+* Python pickle
+* .NET ViewState
+* anything else: a hex dump of the first 64 bytes
+
+Serialized objects in a token are a good place to look for insecure deserialization.
+
+## JWKS analysis
+
+```bash
+./myjwt.py --jwks https://example.com/.well-known/jwks.json
+```
+
+The tool downloads the key set, prints `kty`, `kid` and `alg` for every key, and prints a warning if a key contains the private parameter `d`, which means private key material is public.
+
+## Languages
+
+Add one language flag to translate the interface and the findings.
+
+| Flag | Language | Guide |
+| --- | --- | --- |
+| `-en` (default) | English | [en.hackita.it/articoli/jwt](https://en.hackita.it/articoli/jwt/) |
+| `-it` | Italiano | [hackita.it/articoli/jwt](https://hackita.it/articoli/jwt/) |
+| `-es` | Español | [es.hackita.it/articoli/jwt](https://es.hackita.it/articoli/jwt/) |
+| `-pt` | Português | [pt.hackita.it/articoli/jwt](https://pt.hackita.it/articoli/jwt/) |
+| `-de` | Deutsch | [de.hackita.it/articoli/jwt](https://de.hackita.it/articoli/jwt/) |
+| `-fr` | Français | [fr.hackita.it/articoli/jwt](https://fr.hackita.it/articoli/jwt/) |
+
+Example:
+
+```bash
+./myjwt.py -it --analyze "$TOKEN"
+```
 
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
-| `0` | OK |
-| `1` | Invalid or unreadable token |
-| `2` | Usage error |
-| `3` | Signature does not match (`-k` / `-K`) |
+| `0` | Success |
+| `1` | Invalid or unreadable token, or an operation failed |
+| `2` | No input given (help is printed) or invalid arguments |
+| `3` | The signature does not match (`-k` or `-K`) |
+| `4` | A secret was found in the wordlist (`--crack`) |
+| `130` | Interrupted with Ctrl+C |
 
-See `--help` and the header of `myjwt.py` for the full list.
+Exit codes make the tool easy to use in scripts and CI jobs.
 
-## Guide
+## Known limitations
 
-The full methodology for testing JWTs (signature, keys, headers, claims, sessions) is in the HackIta guide: [hackita.it/articoli/jwt-attacks](https://en.hackita.it/articoli/jwt-attacks/).
+* The nested payload analyzer can print a hex dump for long plain strings, such as URLs, that happen to decode as Base64. Treat a dump of unknown type as noise unless the claim really holds encoded data.
+* `--json` prints findings only together with `--analyze`.
+* `--analyze` and the signature checks work on JWS tokens. JWE tokens are only recognized and their header is shown, because the payload is encrypted.
+* Asymmetric verification expects a public key in PEM format.
+* A single `CRITICAL` finding gives a score of 10, so the overall level is `HIGH`; `CRITICAL` needs a total of 15 or more.
+
+## Defensive checklist
+
+If you maintain an application that issues or accepts JWTs, these are the points the audit looks at:
+
+* Pin the accepted algorithms on the server and reject `none`
+* Never let the token choose its own verification key: ignore embedded `jwk` and `x5c`, and allow-list any `jku` or `x5u` URL
+* Treat `kid` as untrusted input and never use it to build file paths or SQL queries
+* Use long, random secrets for HMAC, and keep asymmetric private keys out of any JWKS
+* Always set `exp`, keep lifetimes short, and validate `iss` and `aud`
+* Keep your JWT library updated, for example against the ECDSA flaw tracked as CVE-2022-21449
+* Do not put secrets or serialized objects in token claims
+
+## Guides
+
+The full methodology for testing and securing JWTs is in the HackIta guide, available in six languages: [English](https://en.hackita.it/articoli/jwt/), [Italiano](https://hackita.it/articoli/jwt/), [Español](https://es.hackita.it/articoli/jwt/), [Português](https://pt.hackita.it/articoli/jwt/), [Deutsch](https://de.hackita.it/articoli/jwt/), [Français](https://fr.hackita.it/articoli/jwt/).
 
 ## Legal
 
-Use `myjwt` only on tokens and systems you own or are explicitly authorized to test: your own labs, CTF platforms such as Hack The Box, and contracted penetration tests.
+Use `myjwt` only on tokens and systems you own or are explicitly authorized to test: your own labs, CTF platforms such as Hack The Box, and contracted penetration tests. You are responsible for how you use it.
 
 ## License
 
