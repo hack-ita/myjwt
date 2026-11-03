@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-myjwt 4.1 - JWT Security Testing Framework
+myjwt - JWT Security Testing Framework
 BY HACKITA - OFFENSIVE SECURITY
 https://hackita.it/articoli/jwt/
 """
