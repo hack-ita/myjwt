@@ -1,23 +1,8 @@
 #!/usr/bin/env python3
 """
-myjwt 4.0 - JWT Security Testing Framework
+myjwt - JWT Security Testing Framework
 BY HACKITA - OFFENSIVE SECURITY
 https://hackita.it/articoli/jwt/
-
-Features:
-- Strict Decoding & Analysis (JSON, Base64URL, UTF-8)
-- Attack Engine (alg:none, kid injection, confusion, claim tampering, forge)
-- Crypto Engine (Optional: requires 'cryptography' for RSA/EC/EdDSA)
-- HTTP Testing Engine (Optional: requires 'requests' for active testing)
-- JWKS Analyzer
-
-Exit Codes:
- 0: Success
- 1: Parse / Token Error
- 2: Usage / Argument Error
- 3: Signature Invalid
- 4: Secret Cracked
- 5: Vulnerabilities Found (--analyze)
 """
 import argparse
 import base64
@@ -35,17 +20,444 @@ import ssl
 from datetime import datetime, timezone
 
 # --- HACKITA BRANDING COLORS ---
-RED    = "\033[38;5;196m"  # Hackita Bright Red
-DRED   = "\033[38;5;88m"   # Hackita Dark Red
-WHITE  = "\033[38;5;255m"  # Pure White
-BLACK  = "\033[38;5;236m"  # Dark Grey
-GREEN  = "\033[38;5;46m"   # Green (for success)
-YELLOW = "\033[38;5;226m"  # Yellow (for warnings)
-DIM    = "\033[2m"         # Dim text
+RED    = "\033[38;5;196m"
+DRED   = "\033[38;5;88m"
+WHITE  = "\033[38;5;255m"
+BLACK  = "\033[38;5;236m"
+GREEN  = "\033[38;5;46m"
+YELLOW = "\033[38;5;226m"
+DIM    = "\033[2m"
 RESET  = "\033[0m"
 BOLD   = "\033[1m"
 
 VERSION = "4.0"
+CURRENT_LANG = "en"
+
+# --- TRANSLATIONS ---
+TRANSLATIONS = {
+    "en": {
+        "vuln_analysis": "[*] VULNERABILITY ANALYSIS",
+        "no_issues": "[+] No obvious issues found.",
+        "missing_exp": "[MEDIUM] Missing 'exp' (expiration) claim",
+        "missing_iss": "[LOW] Missing 'iss' (issuer) claim",
+        "missing_aud": "[LOW] Missing 'aud' (audience) claim",
+        "hmac_sym": "[INFO] Symmetric HMAC ({alg}) - secret strength is crucial",
+        "asym_info": "[INFO] Asymmetric algorithm ({alg})",
+        "missing_alg": "[HIGH] Missing 'alg' in header",
+        "alg_none": "[CRITICAL] Algorithm 'none' is used (Unsecured token)",
+        "invalid_exp": "[HIGH] 'exp' is not a valid NumericDate",
+        "token_expired": "[INFO] Token is expired",
+        "long_lifetime": "[LOW] Token lifetime is very long ({hours} hours)",
+        "future_iat": "[MEDIUM] Token issued in the future ('iat')",
+        "kid_traversal": "[HIGH] Potential 'kid' path traversal",
+        "kid_sqli": "[HIGH] Potential 'kid' SQL injection",
+        "jku_present": "[MEDIUM] 'jku' present: {url} (Check SSRF/Trust)",
+        "x5u_present": "[MEDIUM] 'x5u' present: {url} (Check SSRF/Trust)",
+        "jwk_present": "[HIGH] 'jwk' embedded key present",
+        "x5c_present": "[HIGH] 'x5c' embedded cert chain present",
+        "sensitive_claim": "[INFO] Potential sensitive claim: '{key}'",
+        "header": "[*] HEADER",
+        "payload": "[*] PAYLOAD",
+        "token_type": "[*] TOKEN TYPE: {type}",
+        "parse_error": "[!] Parse Error: {error}",
+        "jwe_encrypted": "[*] JWE Payload is encrypted.",
+        "duplicate_keys": "[!] Duplicate keys detected: {keys}",
+        "attack_mode": "[*] ATTACK MODE: {mode}",
+        "attack_failed": "[!] Attack Failed: {error}",
+        "forged_token": "[+] Forged Token:",
+        "verification": "[*] VERIFICATION",
+        "sig_valid": "[+] Signature VALID",
+        "sig_invalid": "[!] Signature INVALID",
+        "verification_error": "[!] Verification Error: {error}",
+        "cracking": "[*] CRACKING HMAC SECRET",
+        "secret_found": "[+] Secret found: {secret}",
+        "secret_not_found": "[!] No secret found in wordlist.",
+        "error": "[!] Error: {error}",
+        "jwks_fetching": "[*] Fetching JWKS from {url}...",
+        "jwks_found": "[+] Found {count} keys.",
+        "jwks_private_key": "[!] WARNING: Private key material found (parameter 'd')!",
+        "jwks_error": "[!] Error fetching JWKS: {error}",
+        "http_testing": "[*] Testing HTTP Endpoint: {method} {url}",
+        "http_mutated": "Mutated Status: {status} | Length: {length}",
+        "http_baseline": "Baseline Status: {status} | Length: {length}",
+        "http_identical": "[!] Response identical to baseline. No bypass.",
+        "http_diff": "[+] Different response! Possible bypass.",
+        "http_suspicious": "[?] Different response, investigate manually.",
+        "http_error": "[!] HTTP Error: {error}",
+        "invalid_base64": "Invalid Base64URL characters in segment",
+        "invalid_length": "Invalid Base64URL length",
+        "base64_error": "Base64URL decode failed: {error}",
+        "invalid_json": "Invalid JSON: {error}",
+        "invalid_json_nan": "Invalid JSON (NaN or Infinity found)",
+        "expected_parts": "Expected 3 (JWS) or 5 (JWE) parts, got {parts}",
+        "no_jwt": "No JWT found in input",
+        "unsupported_hmac": "Unsupported HMAC alg: {alg}",
+        "crypto_missing": "Missing 'cryptography' library. pip install cryptography",
+        "requests_missing": "[!] 'requests' library required for HTTP testing. pip install requests",
+        "unsupported_asym": "Unsupported asymmetric alg: {alg}",
+        "cannot_forge_secret": "Cannot forge with secret for alg: {alg}",
+        "jwe_crack": "JWE cannot be cracked this way",
+        "not_hmac": "Not HMAC: {alg}",
+        "wordlist_error": "Cannot read wordlist: {error}",
+        "pubkey_required": "--pubkey required for confusion",
+        "secret_required": "-k/--secret required for forge",
+        "pubkey_load_error": "Failed to load public key: {error}",
+        "invalid_ecdsa_len": "Invalid ECDSA signature length",
+    },
+    "it": {
+        "vuln_analysis": "[*] ANALISI VULNERABILITÀ",
+        "no_issues": "[+] Nessun problema evidente trovato.",
+        "missing_exp": "[MEDIUM] Manca il claim 'exp' (scadenza)",
+        "missing_iss": "[LOW] Manca il claim 'iss' (emittente)",
+        "missing_aud": "[LOW] Manca il claim 'aud' (destinatario)",
+        "hmac_sym": "[INFO] HMAC Simmetrico ({alg}) - la robustezza del segreto è cruciale",
+        "asym_info": "[INFO] Algoritmo asimmetrico ({alg})",
+        "missing_alg": "[HIGH] Manca 'alg' nell'header",
+        "alg_none": "[CRITICAL] L'algoritmo 'none' è in uso (Token non sicuro)",
+        "invalid_exp": "[HIGH] 'exp' non è una NumericDate valida",
+        "token_expired": "[INFO] Il token è scaduto",
+        "long_lifetime": "[LOW] La durata del token è molto lunga ({hours} ore)",
+        "future_iat": "[MEDIUM] Token emesso nel futuro ('iat')",
+        "kid_traversal": "[HIGH] Potenziale path traversal in 'kid'",
+        "kid_sqli": "[HIGH] Potenziale SQL injection in 'kid'",
+        "jku_present": "[MEDIUM] 'jku' presente: {url} (Controlla SSRF/Trust)",
+        "x5u_present": "[MEDIUM] 'x5u' presente: {url} (Controlla SSRF/Trust)",
+        "jwk_present": "[HIGH] Chiave incorporata 'jwk' presente",
+        "x5c_present": "[HIGH] Catena di certificati incorporata 'x5c' presente",
+        "sensitive_claim": "[INFO] Potenziale claim sensibile: '{key}'",
+        "header": "[*] HEADER",
+        "payload": "[*] PAYLOAD",
+        "token_type": "[*] TIPO TOKEN: {type}",
+        "parse_error": "[!] Errore di Parsing: {error}",
+        "jwe_encrypted": "[*] Il payload JWE è cifrato.",
+        "duplicate_keys": "[!] Chiavi duplicate rilevate: {keys}",
+        "attack_mode": "[*] MODALITÀ ATTACCO: {mode}",
+        "attack_failed": "[!] Attacco Fallito: {error}",
+        "forged_token": "[+] Token Contraffatto:",
+        "verification": "[*] VERIFICA",
+        "sig_valid": "[+] Firma VALIDA",
+        "sig_invalid": "[!] Firma NON VALIDA",
+        "verification_error": "[!] Errore di Verifica: {error}",
+        "cracking": "[*] CRACKING SEGRETO HMAC",
+        "secret_found": "[+] Segreto trovato: {secret}",
+        "secret_not_found": "[!] Nessun segreto trovato nella wordlist.",
+        "error": "[!] Errore: {error}",
+        "jwks_fetching": "[*] Recupero JWKS da {url}...",
+        "jwks_found": "[+] Trovate {count} chiavi.",
+        "jwks_private_key": "[!] ATTENZIONE: Materiale della chiave privata trovato (parametro 'd')!",
+        "jwks_error": "[!] Errore nel recupero JWKS: {error}",
+        "http_testing": "[*] Test Endpoint HTTP: {method} {url}",
+        "http_mutated": "Stato Mutato: {status} | Lunghezza: {length}",
+        "http_baseline": "Stato Baseline: {status} | Lunghezza: {length}",
+        "http_identical": "[!] Risposta identica alla baseline. Nessun bypass.",
+        "http_diff": "[+] Risposta diversa! Possibile bypass.",
+        "http_suspicious": "[?] Risposta diversa, investigare manualmente.",
+        "http_error": "[!] Errore HTTP: {error}",
+        "invalid_base64": "Caratteri Base64URL non validi nel segmento",
+        "invalid_length": "Lunghezza Base64URL non valida",
+        "base64_error": "Decodifica Base64URL fallita: {error}",
+        "invalid_json": "JSON non valido: {error}",
+        "invalid_json_nan": "JSON non valido (trovato NaN o Infinity)",
+        "expected_parts": "Attese 3 (JWS) o 5 (JWE) parti, trovate {parts}",
+        "no_jwt": "Nessun JWT trovato nell'input",
+        "unsupported_hmac": "Algoritmo HMAC non supportato: {alg}",
+        "crypto_missing": "Libreria 'cryptography' mancante. pip install cryptography",
+        "requests_missing": "[!] Libreria 'requests' richiesta per il test HTTP. pip install requests",
+        "unsupported_asym": "Algoritmo asimmetrico non supportato: {alg}",
+        "cannot_forge_secret": "Impossibile contraffare con segreto per alg: {alg}",
+        "jwe_crack": "JWE non può essere craccato in questo modo",
+        "not_hmac": "Non è HMAC: {alg}",
+        "wordlist_error": "Impossibile leggere la wordlist: {error}",
+        "pubkey_required": "--pubkey richiesto per la confusione",
+        "secret_required": "-k/--secret richiesto per la contraffazione",
+        "pubkey_load_error": "Impossibile caricare la chiave pubblica: {error}",
+        "invalid_ecdsa_len": "Lunghezza firma ECDSA non valida",
+    },
+    "es": {
+        "vuln_analysis": "[*] ANÁLISIS DE VULNERABILIDADES",
+        "no_issues": "[+] No se encontraron problemas obvios.",
+        "missing_exp": "[MEDIUM] Falta el claim 'exp' (expiración)",
+        "missing_iss": "[LOW] Falta el claim 'iss' (emisor)",
+        "missing_aud": "[LOW] Falta el claim 'aud' (audiencia)",
+        "hmac_sym": "[INFO] HMAC Simétrico ({alg}) - la fuerza del secreto es crucial",
+        "asym_info": "[INFO] Algoritmo asimétrico ({alg})",
+        "missing_alg": "[HIGH] Falta 'alg' en el header",
+        "alg_none": "[CRITICAL] Se usa el algoritmo 'none' (Token inseguro)",
+        "invalid_exp": "[HIGH] 'exp' no es una NumericDate válida",
+        "token_expired": "[INFO] El token ha expirado",
+        "long_lifetime": "[LOW] La vida útil del token es muy larga ({hours} horas)",
+        "future_iat": "[MEDIUM] Token emitido en el futuro ('iat')",
+        "kid_traversal": "[HIGH] Posible path traversal en 'kid'",
+        "kid_sqli": "[HIGH] Posible inyección SQL en 'kid'",
+        "jku_present": "[MEDIUM] 'jku' presente: {url} (Verificar SSRF/Confianza)",
+        "x5u_present": "[MEDIUM] 'x5u' presente: {url} (Verificar SSRF/Confianza)",
+        "jwk_present": "[HIGH] Clave incrustada 'jwk' presente",
+        "x5c_present": "[HIGH] Cadena de certificados incrustada 'x5c' presente",
+        "sensitive_claim": "[INFO] Posible claim sensible: '{key}'",
+        "header": "[*] HEADER",
+        "payload": "[*] PAYLOAD",
+        "token_type": "[*] TIPO DE TOKEN: {type}",
+        "parse_error": "[!] Error de Parseo: {error}",
+        "jwe_encrypted": "[*] El payload JWE está cifrado.",
+        "duplicate_keys": "[!] Claves duplicadas detectadas: {keys}",
+        "attack_mode": "[*] MODO ATAQUE: {mode}",
+        "attack_failed": "[!] Ataque Fallido: {error}",
+        "forged_token": "[+] Token Falsificado:",
+        "verification": "[*] VERIFICACIÓN",
+        "sig_valid": "[+] Firma VÁLIDA",
+        "sig_invalid": "[!] Firma INVÁLIDA",
+        "verification_error": "[!] Error de Verificación: {error}",
+        "cracking": "[*] CRACKEANDO SECRETO HMAC",
+        "secret_found": "[+] Secreto encontrado: {secret}",
+        "secret_not_found": "[!] No se encontró ningún secreto en la wordlist.",
+        "error": "[!] Error: {error}",
+        "jwks_fetching": "[*] Obteniendo JWKS de {url}...",
+        "jwks_found": "[+] Encontradas {count} claves.",
+        "jwks_private_key": "[!] ADVERTENCIA: ¡Material de clave privada encontrado (parámetro 'd')!",
+        "jwks_error": "[!] Error al obtener JWKS: {error}",
+        "http_testing": "[*] Probando Endpoint HTTP: {method} {url}",
+        "http_mutated": "Estado Mutado: {status} | Longitud: {length}",
+        "http_baseline": "Estado Baseline: {status} | Longitud: {length}",
+        "http_identical": "[!] Respuesta idéntica a la baseline. Sin bypass.",
+        "http_diff": "[+] ¡Respuesta diferente! Posible bypass.",
+        "http_suspicious": "[?] Respuesta diferente, investigar manualmente.",
+        "http_error": "[!] Error HTTP: {error}",
+        "invalid_base64": "Caracteres Base64URL inválidos en el segmento",
+        "invalid_length": "Longitud Base64URL inválida",
+        "base64_error": "Fallo en decodificación Base64URL: {error}",
+        "invalid_json": "JSON inválido: {error}",
+        "invalid_json_nan": "JSON inválido (se encontró NaN o Infinity)",
+        "expected_parts": "Se esperaban 3 (JWS) o 5 (JWE) partes, se encontraron {parts}",
+        "no_jwt": "No se encontró ningún JWT en la entrada",
+        "unsupported_hmac": "Algoritmo HMAC no soportado: {alg}",
+        "crypto_missing": "Falta la librería 'cryptography'. pip install cryptography",
+        "requests_missing": "[!] Se requiere la librería 'requests' para pruebas HTTP. pip install requests",
+        "unsupported_asym": "Algoritmo asimétrico no soportado: {alg}",
+        "cannot_forge_secret": "No se puede falsificar con secreto para alg: {alg}",
+        "jwe_crack": "JWE no se puede crackear de esta manera",
+        "not_hmac": "No es HMAC: {alg}",
+        "wordlist_error": "No se puede leer la wordlist: {error}",
+        "pubkey_required": "Se requiere --pubkey para la confusión",
+        "secret_required": "Se requiere -k/--secret para falsificar",
+        "pubkey_load_error": "Fallo al cargar la clave pública: {error}",
+        "invalid_ecdsa_len": "Longitud de firma ECDSA inválida",
+    },
+    "pt": {
+        "vuln_analysis": "[*] ANÁLISE DE VULNERABILIDADES",
+        "no_issues": "[+] Nenhum problema óbvio encontrado.",
+        "missing_exp": "[MEDIUM] Falta o claim 'exp' (expiração)",
+        "missing_iss": "[LOW] Falta o claim 'iss' (emissor)",
+        "missing_aud": "[LOW] Falta o claim 'aud' (audiência)",
+        "hmac_sym": "[INFO] HMAC Simétrico ({alg}) - a força do segredo é crucial",
+        "asym_info": "[INFO] Algoritmo assimétrico ({alg})",
+        "missing_alg": "[HIGH] Falta 'alg' no header",
+        "alg_none": "[CRITICAL] O algoritmo 'none' está em uso (Token inseguro)",
+        "invalid_exp": "[HIGH] 'exp' não é uma NumericDate válida",
+        "token_expired": "[INFO] O token expirou",
+        "long_lifetime": "[LOW] O tempo de vida do token é muito longo ({hours} horas)",
+        "future_iat": "[MEDIUM] Token emitido no futuro ('iat')",
+        "kid_traversal": "[HIGH] Potencial path traversal em 'kid'",
+        "kid_sqli": "[HIGH] Potencial injeção SQL em 'kid'",
+        "jku_present": "[MEDIUM] 'jku' presente: {url} (Verificar SSRF/Confiança)",
+        "x5u_present": "[MEDIUM] 'x5u' presente: {url} (Verificar SSRF/Confiança)",
+        "jwk_present": "[HIGH] Chave incorporada 'jwk' presente",
+        "x5c_present": "[HIGH] Cadeia de certificados incorporada 'x5c' presente",
+        "sensitive_claim": "[INFO] Potencial claim sensível: '{key}'",
+        "header": "[*] HEADER",
+        "payload": "[*] PAYLOAD",
+        "token_type": "[*] TIPO DE TOKEN: {type}",
+        "parse_error": "[!] Erro de Parsing: {error}",
+        "jwe_encrypted": "[*] O payload JWE está criptografado.",
+        "duplicate_keys": "[!] Chaves duplicadas detectadas: {keys}",
+        "attack_mode": "[*] MODO ATAQUE: {mode}",
+        "attack_failed": "[!] Ataque Falhou: {error}",
+        "forged_token": "[+] Token Falsificado:",
+        "verification": "[*] VERIFICAÇÃO",
+        "sig_valid": "[+] Assinatura VÁLIDA",
+        "sig_invalid": "[!] Assinatura INVÁLIDA",
+        "verification_error": "[!] Erro de Verificação: {error}",
+        "cracking": "[*] CRACKEANDO SEGREDO HMAC",
+        "secret_found": "[+] Segredo encontrado: {secret}",
+        "secret_not_found": "[!] Nenhum segredo encontrado na wordlist.",
+        "error": "[!] Erro: {error}",
+        "jwks_fetching": "[*] Obtendo JWKS de {url}...",
+        "jwks_found": "[+] Encontradas {count} chaves.",
+        "jwks_private_key": "[!] AVISO: Material de chave privada encontrado (parâmetro 'd')!",
+        "jwks_error": "[!] Erro ao obter JWKS: {error}",
+        "http_testing": "[*] Testando Endpoint HTTP: {method} {url}",
+        "http_mutated": "Status Mutado: {status} | Comprimento: {length}",
+        "http_baseline": "Status Baseline: {status} | Comprimento: {length}",
+        "http_identical": "[!] Resposta idêntica à baseline. Sem bypass.",
+        "http_diff": "[+] Resposta diferente! Possível bypass.",
+        "http_suspicious": "[?] Resposta diferente, investigar manualmente.",
+        "http_error": "[!] Erro HTTP: {error}",
+        "invalid_base64": "Caracteres Base64URL inválidos no segmento",
+        "invalid_length": "Comprimento Base64URL inválido",
+        "base64_error": "Falha na decodificação Base64URL: {error}",
+        "invalid_json": "JSON inválido: {error}",
+        "invalid_json_nan": "JSON inválido (NaN ou Infinity encontrados)",
+        "expected_parts": "Esperadas 3 (JWS) ou 5 (JWE) partes, encontradas {parts}",
+        "no_jwt": "Nenhum JWT encontrado na entrada",
+        "unsupported_hmac": "Algoritmo HMAC não suportado: {alg}",
+        "crypto_missing": "Biblioteca 'cryptography' ausente. pip install cryptography",
+        "requests_missing": "[!] Biblioteca 'requests' necessária para testes HTTP. pip install requests",
+        "unsupported_asym": "Algoritmo assimétrico não suportado: {alg}",
+        "cannot_forge_secret": "Não é possível falsificar com segredo para alg: {alg}",
+        "jwe_crack": "JWE não pode ser crackeado desta forma",
+        "not_hmac": "Não é HMAC: {alg}",
+        "wordlist_error": "Não é possível ler a wordlist: {error}",
+        "pubkey_required": "--pubkey necessário para confusão",
+        "secret_required": "-k/--secret necessário para falsificação",
+        "pubkey_load_error": "Falha ao carregar chave pública: {error}",
+        "invalid_ecdsa_len": "Comprimento de assinatura ECDSA inválido",
+    },
+    "de": {
+        "vuln_analysis": "[*] SCHWACHSTELLENANALYSE",
+        "no_issues": "[+] Keine offensichtlichen Probleme gefunden.",
+        "missing_exp": "[MEDIUM] 'exp' (Ablauf) Claim fehlt",
+        "missing_iss": "[LOW] 'iss' (Aussteller) Claim fehlt",
+        "missing_aud": "[LOW] 'aud' (Zielgruppe) Claim fehlt",
+        "hmac_sym": "[INFO] Symmetrisches HMAC ({alg}) - die Stärke des Geheimnisses ist entscheidend",
+        "asym_info": "[INFO] Asymmetrischer Algorithmus ({alg})",
+        "missing_alg": "[HIGH] 'alg' im Header fehlt",
+        "alg_none": "[CRITICAL] Algorithmus 'none' wird verwendet (Unsicheres Token)",
+        "invalid_exp": "[HIGH] 'exp' ist kein gültiges NumericDate",
+        "token_expired": "[INFO] Token ist abgelaufen",
+        "long_lifetime": "[LOW] Token-Lebensdauer ist sehr lang ({hours} Stunden)",
+        "future_iat": "[MEDIUM] Token in der Zukunft ausgestellt ('iat')",
+        "kid_traversal": "[HIGH] Möglicher 'kid' Path Traversal",
+        "kid_sqli": "[HIGH] Mögliche 'kid' SQL-Injection",
+        "jku_present": "[MEDIUM] 'jku' vorhanden: {url} (SSRF/Vertrauen prüfen)",
+        "x5u_present": "[MEDIUM] 'x5u' vorhanden: {url} (SSRF/Vertrauen prüfen)",
+        "jwk_present": "[HIGH] Eingebetteter Schlüssel 'jwk' vorhanden",
+        "x5c_present": "[HIGH] Eingebettete Zertifikatskette 'x5c' vorhanden",
+        "sensitive_claim": "[INFO] Möglicher sensibler Claim: '{key}'",
+        "header": "[*] HEADER",
+        "payload": "[*] PAYLOAD",
+        "token_type": "[*] TOKEN-TYP: {type}",
+        "parse_error": "[!] Parsing-Fehler: {error}",
+        "jwe_encrypted": "[*] JWE Payload ist verschlüsselt.",
+        "duplicate_keys": "[!] Doppelte Schlüssel erkannt: {keys}",
+        "attack_mode": "[*] ANGRIFFSMODUS: {mode}",
+        "attack_failed": "[!] Angriff fehlgeschlagen: {error}",
+        "forged_token": "[+] Gefälschtes Token:",
+        "verification": "[*] VERIFIZIERUNG",
+        "sig_valid": "[+] Signatur GÜLTIG",
+        "sig_invalid": "[!] Signatur UNGÜLTIG",
+        "verification_error": "[!] Verifizierungsfehler: {error}",
+        "cracking": "[*] HMAC GEHEIMNIS CRACKEN",
+        "secret_found": "[+] Geheimnis gefunden: {secret}",
+        "secret_not_found": "[!] Kein Geheimnis in der Wordlist gefunden.",
+        "error": "[!] Fehler: {error}",
+        "jwks_fetching": "[*] Abrufen von JWKS von {url}...",
+        "jwks_found": "[+] {count} Schlüssel gefunden.",
+        "jwks_private_key": "[!] WARNUNG: Privates Schlüsselmaterial gefunden (Parameter 'd')!",
+        "jwks_error": "[!] Fehler beim Abrufen von JWKS: {error}",
+        "http_testing": "[*] Teste HTTP-Endpunkt: {method} {url}",
+        "http_mutated": "Mutierter Status: {status} | Länge: {length}",
+        "http_baseline": "Baseline-Status: {status} | Länge: {length}",
+        "http_identical": "[!] Antwort identisch mit Baseline. Kein Bypass.",
+        "http_diff": "[+] Unterschiedliche Antwort! Möglicher Bypass.",
+        "http_suspicious": "[?] Unterschiedliche Antwort, manuell untersuchen.",
+        "http_error": "[!] HTTP-Fehler: {error}",
+        "invalid_base64": "Ungültige Base64URL-Zeichen im Segment",
+        "invalid_length": "Ungültige Base64URL-Länge",
+        "base64_error": "Base64URL-Dekodierung fehlgeschlagen: {error}",
+        "invalid_json": "Ungültiges JSON: {error}",
+        "invalid_json_nan": "Ungültiges JSON (NaN oder Infinity gefunden)",
+        "expected_parts": "3 (JWS) oder 5 (JWE) Teile erwartet, {parts} gefunden",
+        "no_jwt": "Kein JWT in der Eingabe gefunden",
+        "unsupported_hmac": "Nicht unterstützter HMAC-Algorithmus: {alg}",
+        "crypto_missing": "Bibliothek 'cryptography' fehlt. pip install cryptography",
+        "requests_missing": "[!] Bibliothek 'requests' für HTTP-Tests erforderlich. pip install requests",
+        "unsupported_asym": "Nicht unterstützter asymmetrischer Algorithmus: {alg}",
+        "cannot_forge_secret": "Kann nicht mit Geheimnis für alg fälschen: {alg}",
+        "jwe_crack": "JWE kann nicht auf diese Weise geknackt werden",
+        "not_hmac": "Kein HMAC: {alg}",
+        "wordlist_error": "Wordlist kann nicht gelesen werden: {error}",
+        "pubkey_required": "--pubkey für Konfusion erforderlich",
+        "secret_required": "-k/--secret zum Fälschen erforderlich",
+        "pubkey_load_error": "Öffentlicher Schlüssel konnte nicht geladen werden: {error}",
+        "invalid_ecdsa_len": "Ungültige ECDSA-Signaturlänge",
+    },
+    "fr": {
+        "vuln_analysis": "[*] ANALYSE DES VULNÉRABILITÉS",
+        "no_issues": "[+] Aucun problème évident trouvé.",
+        "missing_exp": "[MEDIUM] Claim 'exp' (expiration) manquant",
+        "missing_iss": "[LOW] Claim 'iss' (émetteur) manquant",
+        "missing_aud": "[LOW] Claim 'aud' (audience) manquant",
+        "hmac_sym": "[INFO] HMAC Symétrique ({alg}) - la force du secret est cruciale",
+        "asym_info": "[INFO] Algorithme asymétrique ({alg})",
+        "missing_alg": "[HIGH] 'alg' manquant dans l'en-tête",
+        "alg_none": "[CRITICAL] L'algorithme 'none' est utilisé (Token non sécurisé)",
+        "invalid_exp": "[HIGH] 'exp' n'est pas une NumericDate valide",
+        "token_expired": "[INFO] Le token est expiré",
+        "long_lifetime": "[LOW] La durée de vie du token est très longue ({hours} heures)",
+        "future_iat": "[MEDIUM] Token émis dans le futur ('iat')",
+        "kid_traversal": "[HIGH] Path traversal potentiel dans 'kid'",
+        "kid_sqli": "[HIGH] Injection SQL potentielle dans 'kid'",
+        "jku_present": "[MEDIUM] 'jku' présent : {url} (Vérifier SSRF/Confiance)",
+        "x5u_present": "[MEDIUM] 'x5u' présent : {url} (Vérifier SSRF/Confiance)",
+        "jwk_present": "[HIGH] Clé intégrée 'jwk' présente",
+        "x5c_present": "[HIGH] Chaîne de certificats intégrée 'x5c' présente",
+        "sensitive_claim": "[INFO] Claim sensible potentiel : '{key}'",
+        "header": "[*] HEADER",
+        "payload": "[*] PAYLOAD",
+        "token_type": "[*] TYPE DE TOKEN : {type}",
+        "parse_error": "[!] Erreur d'analyse : {error}",
+        "jwe_encrypted": "[*] Le payload JWE est chiffré.",
+        "duplicate_keys": "[!] Clés dupliquées détectées : {keys}",
+        "attack_mode": "[*] MODE ATTAQUE : {mode}",
+        "attack_failed": "[!] Attaque échouée : {error}",
+        "forged_token": "[+] Token Falsifié :",
+        "verification": "[*] VÉRIFICATION",
+        "sig_valid": "[+] Signature VALIDE",
+        "sig_invalid": "[!] Signature INVALIDE",
+        "verification_error": "[!] Erreur de vérification : {error}",
+        "cracking": "[*] CRAQUAGE DU SECRET HMAC",
+        "secret_found": "[+] Secret trouvé : {secret}",
+        "secret_not_found": "[!] Aucun secret trouvé dans la wordlist.",
+        "error": "[!] Erreur : {error}",
+        "jwks_fetching": "[*] Récupération du JWKS depuis {url}...",
+        "jwks_found": "[+] {count} clés trouvées.",
+        "jwks_private_key": "[!] AVERTISSEMENT : Matériel de clé privée trouvé (paramètre 'd') !",
+        "jwks_error": "[!] Erreur lors de la récupération du JWKS : {error}",
+        "http_testing": "[*] Test de l'Endpoint HTTP : {method} {url}",
+        "http_mutated": "Statut Muté : {status} | Longueur : {length}",
+        "http_baseline": "Statut Baseline : {status} | Longueur : {length}",
+        "http_identical": "[!] Réponse identique à la baseline. Pas de bypass.",
+        "http_diff": "[+] Réponse différente ! Bypass possible.",
+        "http_suspicious": "[?] Réponse différente, à investiguer manuellement.",
+        "http_error": "[!] Erreur HTTP : {error}",
+        "invalid_base64": "Caractères Base64URL invalides dans le segment",
+        "invalid_length": "Longueur Base64URL invalide",
+        "base64_error": "Échec du décodage Base64URL : {error}",
+        "invalid_json": "JSON invalide : {error}",
+        "invalid_json_nan": "JSON invalide (NaN ou Infinity trouvé)",
+        "expected_parts": "3 (JWS) ou 5 (JWE) parties attendues, {parts} trouvées",
+        "no_jwt": "Aucun JWT trouvé dans l'entrée",
+        "unsupported_hmac": "Algorithme HMAC non supporté : {alg}",
+        "crypto_missing": "Bibliothèque 'cryptography' manquante. pip install cryptography",
+        "requests_missing": "[!] Bibliothèque 'requests' requise pour les tests HTTP. pip install requests",
+        "unsupported_asym": "Algorithme asymétrique non supporté : {alg}",
+        "cannot_forge_secret": "Impossible de falsifier avec un secret pour alg : {alg}",
+        "jwe_crack": "JWE ne peut pas être craqué de cette manière",
+        "not_hmac": "Pas HMAC : {alg}",
+        "wordlist_error": "Impossible de lire la wordlist : {error}",
+        "pubkey_required": "--pubkey requis pour la confusion",
+        "secret_required": "-k/--secret requis pour falsifier",
+        "pubkey_load_error": "Échec du chargement de la clé publique : {error}",
+        "invalid_ecdsa_len": "Longueur de signature ECDSA invalide",
+    }
+}
+
+def t(key, **kwargs):
+    msg = TRANSLATIONS.get(CURRENT_LANG, TRANSLATIONS["en"]).get(key)
+    if not msg:
+        msg = TRANSLATIONS["en"].get(key, key)
+    if kwargs:
+        return msg.format(**kwargs)
+    return msg
 
 # --- OPTIONAL DEPENDENCIES ---
 try:
@@ -71,14 +483,14 @@ def b64url_decode(segment):
     if not segment:
         return b""
     if not re.match(r"^[A-Za-z0-9_\-]+$", segment):
-        raise JwtError(f"Invalid Base64URL characters in segment")
+        raise JwtError(t("invalid_base64"))
     if len(segment) % 4 == 1:
-        raise JwtError("Invalid Base64URL length")
+        raise JwtError(t("invalid_length"))
     padded = segment + "=" * (-len(segment) % 4)
     try:
         return base64.urlsafe_b64decode(padded)
     except Exception as e:
-        raise JwtError(f"Base64URL decode failed: {e}")
+        raise JwtError(t("base64_error", error=e))
 
 def b64url_encode(data):
     if isinstance(data, str): data = data.encode()
@@ -88,7 +500,7 @@ def strict_json_loads(data):
     try:
         text = data.decode("utf-8")
         if re.search(r'\b(NaN|Infinity)\b', text):
-            raise JwtError("Invalid JSON (NaN or Infinity found)")
+            raise JwtError(t("invalid_json_nan"))
         duplicates = []
         def hook(pairs):
             d = {}
@@ -98,18 +510,17 @@ def strict_json_loads(data):
             return d
         return json.loads(text, object_pairs_hook=hook), duplicates
     except json.JSONDecodeError as e:
-        raise JwtError(f"Invalid JSON: {e}")
+        raise JwtError(t("invalid_json", error=e))
 
 def parse_token(token):
     parts = token.split(".")
     if len(parts) not in (3, 5):
-        raise JwtError(f"Expected 3 (JWS) or 5 (JWE) parts, got {len(parts)}")
+        raise JwtError(t("expected_parts", parts=len(parts)))
     
     header_raw = b64url_decode(parts[0])
     header, dup_h = strict_json_loads(header_raw)
     
     if len(parts) == 5:
-        # JWE: header . encrypted_key . iv . ciphertext . tag
         return {"raw": token, "parts": parts, "header": header, "type": "JWE", "duplicates": dup_h}
     
     payload_raw = b64url_decode(parts[1])
@@ -125,27 +536,27 @@ def extract_token(raw):
     raw = raw.strip()
     candidates = re.findall(r"[A-Za-z0-9_\-+/]+(?:\.[A-Za-z0-9_\-+/]*){2,4}", raw)
     if not candidates:
-        raise JwtError("No JWT found in input")
+        raise JwtError(t("no_jwt"))
     return max(candidates, key=len)
 
 # --------------------------------------------------------- CRYPTO ENGINE --
 def verify_hmac(info, secret):
     alg = info["header"].get("alg")
-    if alg not in HMAC_ALGS: raise JwtError(f"Unsupported HMAC alg: {alg}")
+    if alg not in HMAC_ALGS: raise JwtError(t("unsupported_hmac", alg=alg))
     signing_input = f"{info['parts'][0]}.{info['parts'][1]}".encode()
     expected = hmac.new(secret, signing_input, HMAC_ALGS[alg]).digest()
     return hmac.compare_digest(expected, info["signature"])
 
 def verify_asymmetric(info, pub_key_bytes):
     if not HAS_CRYPTO:
-        raise JwtError("Missing 'cryptography' library. pip install cryptography")
+        raise JwtError(t("crypto_missing"))
     alg = info["header"].get("alg")
     signing_input = f"{info['parts'][0]}.{info['parts'][1]}".encode()
     
     try:
         public_key = serialization.load_pem_public_key(pub_key_bytes)
     except Exception as e:
-        raise JwtError(f"Failed to load public key: {e}")
+        raise JwtError(t("pubkey_load_error", error=e))
 
     try:
         if alg.startswith("RS"):
@@ -157,10 +568,9 @@ def verify_asymmetric(info, pub_key_bytes):
         elif alg.startswith("ES"):
             hash_alg = hashes.SHA256() if alg == "ES256" else hashes.SHA384() if alg == "ES384" else hashes.SHA512()
             key_size = public_key.key_size
-            # JOSE format: R || S. Cryptography wants DER.
             num_bytes = (key_size + 7) // 8
             if len(info["signature"]) != 2 * num_bytes:
-                raise JwtError("Invalid ECDSA signature length")
+                raise JwtError(t("invalid_ecdsa_len"))
             r = int.from_bytes(info["signature"][:num_bytes], 'big')
             s = int.from_bytes(info["signature"][num_bytes:], 'big')
             der_sig = utils.encode_dss_signature(r, s)
@@ -168,9 +578,9 @@ def verify_asymmetric(info, pub_key_bytes):
         elif alg in ("EdDSA", "Ed25519", "Ed448"):
             public_key.verify(info["signature"], signing_input)
         else:
-            raise JwtError(f"Unsupported asymmetric alg: {alg}")
+            raise JwtError(t("unsupported_asym", alg=alg))
         return True
-    except Exception as e:
+    except Exception:
         return False
 
 # --------------------------------------------------------- ATTACK ENGINE --
@@ -204,7 +614,7 @@ def forge_claims(info, claims_to_set, secret, jku=None, x5u=None):
     for assignment in claims_to_set:
         k, v_str = assignment.split("=", 1)
         try:
-            v = json.loads(v_str) # Handles true, 123, null, array, obj
+            v = json.loads(v_str)
         except json.JSONDecodeError:
             v = v_str
         payload[k] = v
@@ -217,16 +627,16 @@ def forge_claims(info, claims_to_set, secret, jku=None, x5u=None):
     if alg in HMAC_ALGS:
         sig = hmac.new(secret, signing_input, HMAC_ALGS[alg]).digest()
     else:
-        raise JwtError(f"Cannot forge with secret for alg: {alg}")
+        raise JwtError(t("cannot_forge_secret", alg=alg))
         
     return f"{header_b64}.{payload_b64}.{b64url_encode(sig)}"
 
 # --------------------------------------------------------- CRACK ENGINE --
 def crack_hmac(token, wordlist_path, max_lines=None):
     info = parse_token(token)
-    if info["type"] != "JWS": raise JwtError("JWE cannot be cracked this way")
+    if info["type"] != "JWS": raise JwtError(t("jwe_crack"))
     alg = info["header"].get("alg")
-    if alg not in HMAC_ALGS: raise JwtError(f"Not HMAC: {alg}")
+    if alg not in HMAC_ALGS: raise JwtError(t("not_hmac", alg=alg))
     signing_input = f"{info['parts'][0]}.{info['parts'][1]}".encode()
     target_sig = info["signature"]
 
@@ -241,7 +651,7 @@ def crack_hmac(token, wordlist_path, max_lines=None):
                 if hmac.compare_digest(expected, target_sig):
                     return word
     except OSError as e:
-        raise JwtError(f"Cannot read wordlist: {e}")
+        raise JwtError(t("wordlist_error", error=e))
     return None
 
 # --------------------------------------------------------- VULN SCANNER --
@@ -252,51 +662,51 @@ def analyze(info, now):
     alg = header.get("alg")
     
     if not alg:
-        findings.append(("HIGH", "Missing 'alg' in header"))
+        findings.append(("HIGH", t("missing_alg")))
     elif str(alg).lower() == "none":
-        findings.append(("CRITICAL", "Algorithm 'none' is used (Unsecured token)"))
+        findings.append(("CRITICAL", t("alg_none")))
     elif alg.upper() in HMAC_ALGS:
-        findings.append(("INFO", f"Symmetric HMAC ({alg}) - secret strength is crucial"))
+        findings.append(("INFO", t("hmac_sym", alg=alg)))
     elif alg.startswith(("RS", "PS", "ES")):
-        findings.append(("INFO", f"Asymmetric algorithm ({alg})"))
+        findings.append(("INFO", t("asym_info", alg=alg)))
     
     if "exp" not in payload:
-        findings.append(("MEDIUM", "Missing 'exp' (expiration) claim"))
+        findings.append(("MEDIUM", t("missing_exp")))
     else:
         exp = payload["exp"]
         if not isinstance(exp, (int, float)):
-            findings.append(("HIGH", "'exp' is not a valid NumericDate"))
+            findings.append(("HIGH", t("invalid_exp")))
         elif exp < now:
-            findings.append(("INFO", "Token is expired"))
+            findings.append(("INFO", t("token_expired")))
         elif exp - now > 86400:
-            findings.append(("LOW", f"Token lifetime is very long ({int((exp-now)/3600)} hours)"))
+            findings.append(("LOW", t("long_lifetime", hours=int((exp-now)/3600))))
             
     if "iat" in payload:
         iat = payload["iat"]
         if isinstance(iat, (int, float)) and iat > now + 60:
-            findings.append(("MEDIUM", "Token issued in the future ('iat')"))
+            findings.append(("MEDIUM", t("future_iat")))
             
     if "iss" not in payload:
-        findings.append(("LOW", "Missing 'iss' (issuer) claim"))
+        findings.append(("LOW", t("missing_iss")))
     if "aud" not in payload:
-        findings.append(("LOW", "Missing 'aud' (audience) claim"))
+        findings.append(("LOW", t("missing_aud")))
         
     if "kid" in header:
         kid = str(header["kid"])
         if "../" in kid or "/" in kid:
-            findings.append(("HIGH", "Potential 'kid' path traversal"))
+            findings.append(("HIGH", t("kid_traversal")))
         if "'" in kid or '"' in kid or "union" in kid.lower():
-            findings.append(("HIGH", "Potential 'kid' SQL injection"))
+            findings.append(("HIGH", t("kid_sqli")))
             
-    if "jku" in header: findings.append(("MEDIUM", f"'jku' present: {header['jku']} (Check SSRF/Trust)"))
-    if "x5u" in header: findings.append(("MEDIUM", f"'x5u' present: {header['x5u']} (Check SSRF/Trust)"))
-    if "jwk" in header: findings.append(("HIGH", "'jwk' embedded key present"))
-    if "x5c" in header: findings.append(("HIGH", "'x5c' embedded cert chain present"))
+    if "jku" in header: findings.append(("MEDIUM", t("jku_present", url=header['jku'])))
+    if "x5u" in header: findings.append(("MEDIUM", t("x5u_present", url=header['x5u'])))
+    if "jwk" in header: findings.append(("HIGH", t("jwk_present")))
+    if "x5c" in header: findings.append(("HIGH", t("x5c_present")))
         
     sensitive_keys = ["password", "secret", "token", "api_key", "email"]
     for k in payload:
         if any(s in k.lower() for s in sensitive_keys):
-            findings.append(("INFO", f"Potential sensitive claim: '{k}'"))
+            findings.append(("INFO", t("sensitive_claim", key=k)))
             
     sev_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
     findings.sort(key=lambda x: sev_order.get(x[0], 5))
@@ -305,7 +715,7 @@ def analyze(info, now):
 # --------------------------------------------------------- HTTP ENGINE --
 def test_http_endpoint(url, method, headers_str, new_token, original_token=None, insecure=False):
     if not HAS_REQUESTS:
-        print(f"{RED}[!] 'requests' library required for HTTP testing. pip install requests{RESET}")
+        print(t("requests_missing"))
         return
     
     headers = {}
@@ -316,26 +726,26 @@ def test_http_endpoint(url, method, headers_str, new_token, original_token=None,
     
     headers["Authorization"] = f"Bearer {new_token}"
     
-    print(f"\n{DRED}[*] Testing HTTP Endpoint: {method} {url}{RESET}")
+    print(f"\n{DRED}{t('http_testing', method=method, url=url)}{RESET}")
     try:
         r_new = requests.request(method, url, headers=headers, timeout=10, verify=not insecure)
-        print(f"  {WHITE}Mutated Status: {r_new.status_code} | Length: {len(r_new.text)}{RESET}")
+        print(f"  {WHITE}{t('http_mutated', status=r_new.status_code, length=len(r_new.text))}{RESET}")
         
         if original_token:
             headers_orig = headers.copy()
             headers_orig["Authorization"] = f"Bearer {original_token}"
             r_orig = requests.request(method, url, headers=headers_orig, timeout=10, verify=not insecure)
-            print(f"  {DIM}Baseline Status: {r_orig.status_code} | Length: {len(r_orig.text)}{RESET}")
+            print(f"  {DIM}{t('http_baseline', status=r_orig.status_code, length=len(r_orig.text))}{RESET}")
             
             if r_new.status_code == r_orig.status_code and len(r_new.text) == len(r_orig.text):
-                print(f"  {YELLOW}[!] Response identical to baseline. No bypass.{RESET}")
+                print(f"  {YELLOW}{t('http_identical')}{RESET}")
             elif r_new.status_code == 200 and r_orig.status_code != 200:
-                print(f"  {GREEN}[+] Different response! Possible bypass.{RESET}")
+                print(f"  {GREEN}{t('http_diff')}{RESET}")
                 print(f"  {DIM}{r_new.text[:200]}...{RESET}")
             else:
-                print(f"  {YELLOW}[?] Different response, investigate manually.{RESET}")
+                print(f"  {YELLOW}{t('http_suspicious')}{RESET}")
     except Exception as e:
-        print(f"  {RED}[!] HTTP Error: {e}{RESET}")
+        print(f"  {RED}{t('http_error', error=e)}{RESET}")
 
 # --------------------------------------------------------- JWKS ANALYZER --
 def analyze_jwks(url, insecure=False):
@@ -344,23 +754,25 @@ def analyze_jwks(url, insecure=False):
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
 
-    print(f"{DRED}[*] Fetching JWKS from {url}...{RESET}")
+    print(f"{DRED}{t('jwks_fetching', url=url)}{RESET}")
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'myjwt/4.0'})
         with urllib.request.urlopen(req, timeout=10, context=ctx) as response:
             jwks = json.loads(response.read().decode())
             
         keys = jwks.get("keys", [])
-        print(f"{WHITE}[+] Found {len(keys)} keys.{RESET}")
+        print(f"{WHITE}{t('jwks_found', count=len(keys))}{RESET}")
         for i, k in enumerate(keys):
             print(f"  {RED}Key {i+1}:{RESET} kty={k.get('kty')}, kid={k.get('kid')}, alg={k.get('alg')}")
             if k.get('d'):
-                print(f"    {RED}[!] WARNING: Private key material found (parameter 'd')!{RESET}")
+                print(f"    {RED}{t('jwks_private_key')}{RESET}")
     except Exception as e:
-        print(f"{RED}[!] Error fetching JWKS: {e}{RESET}")
+        print(f"{RED}{t('jwks_error', error=e)}{RESET}")
 
 # --------------------------------------------------------- MAIN & CLI --
 def main():
+    global CURRENT_LANG
+    
     logo = f"""
 {WHITE}{BOLD}██╗  ██╗ █████╗  ██████╗██╗  ██╗{RED}██╗████████╗ █████╗ {RESET}
 {WHITE}{BOLD}██║  ██║██╔══██╗██╔════╝██║ ██╔╝{RED}██║╚══██╔══╝██╔══██╗{RESET}
@@ -389,7 +801,17 @@ def main():
     parser.add_argument("--jku", help="JKU URL to inject")
     parser.add_argument("--x5u", help="X5U URL to inject")
 
+    lang_group = parser.add_mutually_exclusive_group()
+    lang_group.add_argument("-en", action="store_const", const="en", dest="lang", help="English (default)")
+    lang_group.add_argument("-it", action="store_const", const="it", dest="lang", help="Italiano")
+    lang_group.add_argument("-es", action="store_const", const="es", dest="lang", help="Español")
+    lang_group.add_argument("-pt", action="store_const", const="pt", dest="lang", help="Português")
+    lang_group.add_argument("-de", action="store_const", const="de", dest="lang", help="Deutsch")
+    lang_group.add_argument("-fr", action="store_const", const="fr", dest="lang", help="Français")
+    parser.set_defaults(lang="en")
+
     args = parser.parse_args()
+    CURRENT_LANG = args.lang
 
     if not args.token and not args.file and not args.jwks:
         print(logo)
@@ -407,56 +829,52 @@ def main():
         token = extract_token(raw)
         info = parse_token(token)
     except JwtError as e:
-        print(f"{RED}[!] Parse Error: {e}{RESET}")
+        print(f"{RED}{t('parse_error', error=e)}{RESET}")
         sys.exit(1)
 
-    # Output Base
     print(f"{DRED}=================================================={RESET}")
-    print(f"{RED}{BOLD}[*] TOKEN TYPE: {info['type']}{RESET}")
-    print(f"{RED}{BOLD}[*] HEADER{RESET}")
+    print(f"{RED}{BOLD}{t('token_type', type=info['type'])}{RESET}")
+    print(f"{RED}{BOLD}{t('header')}{RESET}")
     print(json.dumps(info["header"], indent=2))
     
     if info["type"] == "JWS":
-        print(f"{RED}{BOLD}[*] PAYLOAD{RESET}")
+        print(f"{RED}{BOLD}{t('payload')}{RESET}")
         print(json.dumps(info["payload"], indent=2))
     else:
-        print(f"{DIM}[*] JWE Payload is encrypted.{RESET}")
+        print(f"{DIM}{t('jwe_encrypted')}{RESET}")
 
     if info["duplicates"]:
-        print(f"{RED}[!] Duplicate keys detected: {info['duplicates']}{RESET}")
+        print(f"{RED}{t('duplicate_keys', keys=info['duplicates'])}{RESET}")
 
-    # Analyze
     if args.analyze and info["type"] == "JWS":
         print(f"\n{DRED}=================================================={RESET}")
-        print(f"{RED}{BOLD}[*] VULNERABILITY ANALYSIS{RESET}")
+        print(f"{RED}{BOLD}{t('vuln_analysis')}{RESET}")
         findings = analyze(info, time.time())
         if not findings:
-            print(f"  {GREEN}[+] No obvious issues found.{RESET}")
+            print(f"  {GREEN}{t('no_issues')}{RESET}")
         else:
             for sev, msg in findings:
                 color = RED if sev in ("CRITICAL", "HIGH") else YELLOW if sev == "MEDIUM" else WHITE
                 print(f"  {color}[{sev}]{RESET} {msg}")
             sys.exit(5)
     
-    # Crack
     if args.crack:
         print(f"\n{DRED}=================================================={RESET}")
-        print(f"{RED}{BOLD}[*] CRACKING HMAC SECRET{RESET}")
+        print(f"{RED}{BOLD}{t('cracking')}{RESET}")
         try:
             secret = crack_hmac(token, args.crack, args.max_lines)
             if secret:
-                print(f"{GREEN}[+] Secret found: {secret}{RESET}")
+                print(f"{GREEN}{t('secret_found', secret=secret)}{RESET}")
                 sys.exit(4)
             else:
-                print(f"{YELLOW}[!] No secret found in wordlist.{RESET}")
+                print(f"{YELLOW}{t('secret_not_found')}{RESET}")
         except Exception as e:
-            print(f"{RED}[!] Error: {e}{RESET}")
+            print(f"{RED}{t('error', error=e)}{RESET}")
             sys.exit(1)
 
-    # Attacks
     if args.attack and info["type"] == "JWS":
         print(f"\n{DRED}=================================================={RESET}")
-        print(f"{RED}{BOLD}[*] ATTACK MODE: {args.attack.upper()}{RESET}")
+        print(f"{RED}{BOLD}{t('attack_mode', mode=args.attack.upper())}{RESET}")
         
         new_token = None
         try:
@@ -465,36 +883,35 @@ def main():
             elif args.attack == "kid":
                 new_token = forge_kid(info)
             elif args.attack == "confusion":
-                if not args.pubkey: raise JwtError("--pubkey required for confusion")
+                if not args.pubkey: raise JwtError(t("pubkey_required"))
                 with open(args.pubkey, "rb") as f: new_token = forge_confusion(info, f.read())
             elif args.attack == "forge":
-                if not args.secret: raise JwtError("-k/--secret required for forge")
+                if not args.secret: raise JwtError(t("secret_required"))
                 new_token = forge_claims(info, args.set, args.secret.encode(), args.jku, args.x5u)
         except Exception as e:
-            print(f"{RED}[!] Attack Failed: {e}{RESET}")
+            print(f"{RED}{t('attack_failed', error=e)}{RESET}")
             sys.exit(1)
 
         if new_token:
-            print(f"{GREEN}[+] Forged Token:{RESET}\n{new_token}")
+            print(f"{GREEN}{t('forged_token')}{RESET}\n{new_token}")
             if args.url:
                 test_http_endpoint(args.url, args.method, args.headers, new_token, original_token=token, insecure=args.insecure)
     
-    # Verification
     elif args.secret or args.pubkey:
         print(f"\n{DRED}=================================================={RESET}")
-        print(f"{RED}{BOLD}[*] VERIFICATION{RESET}")
+        print(f"{RED}{BOLD}{t('verification')}{RESET}")
         try:
             if args.secret:
                 ok = verify_hmac(info, args.secret.encode())
-                print(f"{GREEN if ok else RED}[{'+' if ok else '!'}] HMAC Signature {'VALID' if ok else 'INVALID'}{RESET}")
+                print(f"{GREEN if ok else RED}{t('sig_valid') if ok else t('sig_invalid')}{RESET}")
                 if not ok: sys.exit(3)
             elif args.pubkey:
                 with open(args.pubkey, "rb") as f:
                     ok = verify_asymmetric(info, f.read())
-                print(f"{GREEN if ok else RED}[{'+' if ok else '!'}] Asymmetric Signature {'VALID' if ok else 'INVALID'}{RESET}")
+                print(f"{GREEN if ok else RED}{t('sig_valid') if ok else t('sig_invalid')}{RESET}")
                 if not ok: sys.exit(3)
         except Exception as e:
-            print(f"{RED}[!] Verification Error: {e}{RESET}")
+            print(f"{RED}{t('verification_error', error=e)}{RESET}")
             sys.exit(1)
 
     # Footer
