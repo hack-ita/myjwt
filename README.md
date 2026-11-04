@@ -140,7 +140,9 @@ Standard input is read through `-f /dev/stdin`. Piping into the command without 
 | `--crack WORDLIST` | Check an HMAC token against a wordlist, to test secret strength |
 | `--max-lines N` | Limit the number of wordlist lines read |
 | `--attack {none,confusion,kid,forge}` | Generate a modified test token to try against a system you are authorized to test |
-| `--set CLAIM=VALUE` | Claim to set in the modified token (repeatable, the value can be JSON) |
+| `--generate ALG` | Build a fresh token from scratch, no input token needed (`none` or `HS256`/`HS384`/`HS512`) |
+| `--exp SECONDS` | With `--generate`: expiry in seconds from now |
+| `--set CLAIM=VALUE` | Claim to set in the modified or generated token (repeatable, the value can be JSON) |
 | `--jku URL`, `--x5u URL` | Header URL to set in the modified token |
 | `--url URL` | Target URL for HTTP testing |
 | `--verify-endpoint URL` | Endpoint to send the modified token to (takes priority over `--url`) |
@@ -148,6 +150,7 @@ Standard input is read through `-f /dev/stdin`. Piping into the command without 
 | `--headers HEADERS` | Extra request headers, comma-separated (`Name: value,Name: value`) |
 | `--success-strings LIST`, `--failure-strings LIST` | Comma-separated strings that mark success or failure in the response |
 | `--poc` | Print a ready-to-run `curl` command (needs `--url`) |
+| `--export-burp FILE` | Write a raw HTTP request file for Burp Repeater (needs `--url` and an attack) |
 | `--no-color` | Disable ANSI colors (colors are also disabled when output is not a terminal) |
 | `-en` `-it` `-es` `-pt` `-de` `-fr` | Output language |
 
@@ -218,7 +221,33 @@ Serialized objects in a token are a good place to look for insecure deserializat
 ./myjwt.py --jwks https://example.com/.well-known/jwks.json
 ```
 
-The tool downloads the key set, prints `kty`, `kid` and `alg` for every key, and prints a warning if a key contains the private parameter `d`, which means private key material is public.
+The tool downloads the key set, prints `kty`, `kid`, `alg` and `use` for every key, and additionally flags:
+
+* A key containing the private parameter `d` — private key material is public
+* Two keys sharing the same `kid` — a key confusion risk
+* A key with no `kid` or no `use`
+* A `use` that contradicts its `alg` (`use: sig` with an encryption algorithm, or the reverse)
+
+## Generating test tokens
+
+`--generate` builds a brand new token without needing an existing one, for lab setups and quick tests. It supports `alg none` and the HMAC algorithms:
+
+```bash
+./myjwt.py --generate HS256 -k secret --set sub=1042 --set role=admin --exp 3600
+./myjwt.py --generate none --set sub=1042
+```
+
+## Verifying an x5c certificate chain
+
+When the header carries an embedded `x5c` certificate chain, `--analyze` automatically checks the signature against the leaf certificate's public key and reports whether they match. This only proves the header is internally consistent — an attacker who controls the header can embed their own self-signed certificate, so a match is not proof the token is trustworthy.
+
+## Exporting to Burp
+
+`--export-burp FILE` writes a raw HTTP request (method, path, headers and the forged `Authorization: Bearer` header) built from `--url`, `--method` and `--headers`, ready to paste into Burp Repeater:
+
+```bash
+./myjwt.py "$TOKEN" --attack forge -k secret --set role=admin --url https://target.test/api/me --export-burp request.txt
+```
 
 ## Languages
 
@@ -252,8 +281,11 @@ Example:
 
 Exit codes make the tool easy to use in scripts and CI jobs.
 
+`--crack` also prints the attempt rate and, when it can estimate the wordlist size from the file, an ETA at that rate.
+
 ## Known limitations
 
+* `--generate` only builds `alg none` and HMAC tokens; it has no private key to sign RSA/ECDSA/EdDSA tokens with. Use `--attack forge` on an existing HMAC token, or sign RSA/EC tokens with your own tooling.
 * The nested payload analyzer can print a hex dump for long plain strings, such as URLs, that happen to decode as Base64. Treat a dump of unknown type as noise unless the claim really holds encoded data.
 * `--json` prints findings only together with `--analyze`.
 * `--analyze` and the signature checks work on JWS tokens. JWE tokens are only recognized and their header is shown, because the payload is encrypted.

