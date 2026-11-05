@@ -650,6 +650,153 @@ def extract_java_strings(data):
         i += 1
     return strings
 
+class JavaStreamParser:
+    """Minimal Java serialization reader: class name, field names and values (no deps)."""
+    def __init__(self, data):
+        self.data = data
+        self.pos = 4  # skip magic AC ED + version 00 05
+        self.handles = []
+
+    def read(self, n):
+        if self.pos + n > len(self.data):
+            raise ValueError("truncated stream")
+        chunk = self.data[self.pos:self.pos + n]
+        self.pos += n
+        return chunk
+
+    def u1(self):
+        return self.read(1)[0]
+
+    def u2(self):
+        return int.from_bytes(self.read(2), "big")
+
+    def s4(self):
+        return int.from_bytes(self.read(4), "big", signed=True)
+
+    def utf(self):
+        return self.read(self.u2()).decode("utf-8", errors="replace")
+
+    def new_handle(self, obj):
+        self.handles.append(obj)
+        return obj
+
+    def read_content(self):
+        tc = self.u1()
+        if tc == 0x70:  # TC_NULL
+            return None
+        if tc == 0x71:  # TC_REFERENCE
+            idx = self.s4() - 0x7E0000
+            return self.handles[idx] if 0 <= idx < len(self.handles) else "<ref>"
+        if tc == 0x74:  # TC_STRING
+            return self.new_handle(self.utf())
+        if tc == 0x7C:  # TC_LONGSTRING
+            n = int.from_bytes(self.read(8), "big")
+            return self.new_handle(self.read(n).decode("utf-8", errors="replace"))
+        if tc == 0x72:  # TC_CLASSDESC
+            return self.read_classdesc_body()
+        if tc == 0x73:  # TC_OBJECT
+            return self.read_object()
+        if tc == 0x75:  # TC_ARRAY
+            return self.read_array()
+        if tc == 0x7E:  # TC_ENUM
+            desc = self.read_content()
+            obj = self.new_handle({"__class__": desc["name"] if desc else "?", "__enum__": None})
+            obj["__enum__"] = self.read_content()
+            return obj
+        raise ValueError("unsupported tag 0x%02x" % tc)
+
+    def read_classdesc_body(self):
+        desc = {"name": self.utf()}
+        self.read(8)  # serialVersionUID
+        self.new_handle(desc)
+        desc["flags"] = self.u1()
+        desc["fields"] = []
+        for _ in range(self.u2()):
+            ftype = chr(self.u1())
+            fname = self.utf()
+            if ftype in "L[":
+                self.read_content()  # type string, not needed
+            desc["fields"].append((ftype, fname))
+        self.skip_annotation()
+        desc["super"] = self.read_content()
+        return desc
+
+    def skip_annotation(self):
+        while True:
+            if self.data[self.pos] == 0x78:  # TC_ENDBLOCKDATA
+                self.pos += 1
+                return
+            if self.data[self.pos] == 0x77:  # TC_BLOCKDATA
+                self.pos += 1
+                self.read(self.u1())
+                continue
+            self.read_content()
+
+    def read_value(self, ftype):
+        if ftype == "I": return self.s4()
+        if ftype == "J": return int.from_bytes(self.read(8), "big", signed=True)
+        if ftype == "S": return int.from_bytes(self.read(2), "big", signed=True)
+        if ftype == "B": return int.from_bytes(self.read(1), "big", signed=True)
+        if ftype == "Z": return bool(self.u1())
+        if ftype == "C": return chr(self.u2())
+        if ftype == "F":
+            import struct
+            return struct.unpack(">f", self.read(4))[0]
+        if ftype == "D":
+            import struct
+            return struct.unpack(">d", self.read(8))[0]
+        return self.read_content()
+
+    def read_object(self):
+        desc = self.read_content()
+        obj = self.new_handle({"__class__": desc["name"] if isinstance(desc, dict) else "?"})
+        chain = []
+        while isinstance(desc, dict):
+            chain.insert(0, desc)  # superclass data comes first
+            desc = desc.get("super")
+        for d in chain:
+            for ftype, fname in d["fields"]:
+                obj[fname] = self.read_value(ftype)
+            if d["flags"] & 0x01:  # SC_WRITE_METHOD: custom writeObject data
+                self.skip_annotation()
+        return obj
+
+    def read_array(self):
+        desc = self.read_content()
+        arr = self.new_handle([])
+        etype = desc["name"][1] if isinstance(desc, dict) and len(desc["name"]) > 1 else "L"
+        for _ in range(self.s4()):
+            arr.append(self.read_value(etype))
+        return arr
+
+
+def parse_java_object(data):
+    """Return the decoded object as a dict, or None if the stream is too complex."""
+    try:
+        return JavaStreamParser(data).read_content()
+    except Exception:
+        return None
+
+
+def print_java_object(obj, indent=4):
+    pad = " " * indent
+    if isinstance(obj, dict) and "__class__" in obj:
+        print(f"{pad}{WHITE}class: {obj['__class__']}{RESET}")
+        for name, value in obj.items():
+            if name == "__class__":
+                continue
+            if isinstance(value, (dict, list)):
+                print(f"{pad}{GREEN}{name}{RESET} =")
+                print_java_object(value, indent + 4)
+            else:
+                print(f"{pad}{GREEN}{name}{RESET} = {value}")
+    elif isinstance(obj, list):
+        for item in obj:
+            print_java_object(item, indent) if isinstance(item, (dict, list)) else print(f"{pad}- {item}")
+    else:
+        print(f"{pad}{obj}")
+
+
 def extract_php_strings(data):
     strings = []
     pattern = re.compile(rb's:(\d+):"(.*?)";')
@@ -716,6 +863,12 @@ def analyze_nested_payload(payload):
         fmt = None
         extracted = []
         if decoded.startswith(b'\xac\xed\x00\x05'):
+            java_obj = parse_java_object(decoded)
+            if isinstance(java_obj, dict):
+                print(f"\n{YELLOW}{t('nested_payload', key=k)}{RESET}")
+                print(f"  {WHITE}{t('nested_type', type='Java Serialization')}{RESET}")
+                print_java_object(java_obj)
+                continue
             fmt = "Java Serialization"
             extracted = extract_java_strings(decoded)
         elif decoded.startswith(b'O:') or decoded.startswith(b'a:') or decoded.startswith(b's:'):
